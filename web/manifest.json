@@ -1,0 +1,9 @@
+{
+  "name": "Phone 3D Capture",
+  "short_name": "3D Capture",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": []
+}

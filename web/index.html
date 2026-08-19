@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Phone 3D Capture</title>
+<meta name="theme-color" content="#0f172a" />
+<link rel="manifest" href="manifest.json" />
+<link rel="stylesheet" href="styles.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/",
+    "@mkkellogg/gaussian-splats-3d": "./vendor/gaussian-splats-3d/gaussian-splats-3d.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<header class="topbar">
+  <button id="btn-back" class="icon-btn" hidden aria-label="Back">&larr;</button>
+  <h1 id="topbar-title">Phone 3D Capture</h1>
+</header>
+
+<main id="app">
+
+  <!-- SESSIONS LIST -->
+  <section id="screen-sessions" class="screen">
+    <p class="muted">
+      Scan a real object into a 3D model, right from your phone's browser.
+      Choose a photorealistic Gaussian-splat render, or a measurable, printable mesh.
+    </p>
+    <form id="form-new-session" class="row">
+      <input id="input-session-name" type="text" placeholder="What are you scanning? (e.g. Ceramic mug)" required />
+      <button type="submit" class="btn-primary">New Scan</button>
+    </form>
+    <ul id="session-list" class="session-list"></ul>
+  </section>
+
+  <!-- CAPTURE -->
+  <section id="screen-capture" class="screen">
+    <div class="camera-wrap">
+      <video id="camera-video" autoplay playsinline muted></video>
+      <canvas id="capture-canvas" hidden></canvas>
+      <div id="capture-hud" class="capture-hud">
+        <div id="shot-counter" class="shot-counter">0 photos</div>
+        <div id="capture-tip" class="capture-tip"></div>
+      </div>
+    </div>
+
+    <details id="tips-card" class="tips-card" open>
+      <summary>Capture tips</summary>
+      <ul>
+        <li><strong>Lighting:</strong> even, diffuse light (overcast outdoor light is ideal). Avoid harsh or changing shadows.</li>
+        <li><strong>Surface:</strong> matte, textured surfaces work best. Shiny/clear objects: dust with scanning spray or dry shampoo first.</li>
+        <li><strong>Coverage:</strong> aim for 60-150+ photos, heavy overlap, orbiting at multiple heights. Keep the object still and fill the frame.</li>
+        <li><strong>Scale:</strong> place a ruler or object of known size next to it if you'll need real-world dimensions.</li>
+      </ul>
+    </details>
+
+    <div class="thumbs" id="thumb-strip"></div>
+
+    <div class="capture-controls">
+      <button id="btn-switch-camera" class="icon-btn" aria-label="Switch camera">&#8635;</button>
+      <button id="btn-shutter" class="shutter-btn" aria-label="Capture photo"></button>
+      <button id="btn-done-capturing" class="btn-primary">Done</button>
+    </div>
+  </section>
+
+  <!-- MODE SELECTION -->
+  <section id="screen-mode" class="screen">
+    <h2>Choose your result</h2>
+    <div class="mode-cards">
+      <button class="mode-card" data-mode="compelling">
+        <h3>Compelling</h3>
+        <p>Photorealistic Gaussian splat. Best for glass, hair, foliage, reflections - great for AR and sharing.</p>
+        <p class="mode-caveat">Requires a GPU-equipped server. Not a measurable/editable mesh.</p>
+      </button>
+      <button class="mode-card" data-mode="accurate">
+        <h3>Accurate</h3>
+        <p>Photogrammetry mesh (OBJ/PLY) with measurable geometry - for 3D printing, CAD, and reverse engineering.</p>
+        <p class="mode-caveat">Works on any server (CPU fallback available); best on larger, well-textured objects.</p>
+      </button>
+    </div>
+    <p id="photo-count-warning" class="muted"></p>
+  </section>
+
+  <!-- PROGRESS -->
+  <section id="screen-progress" class="screen">
+    <h2>Reconstructing your model&hellip;</h2>
+    <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+    <p id="progress-message" class="muted"></p>
+    <p id="progress-stage" class="progress-stage"></p>
+  </section>
+
+  <!-- VIEWER -->
+  <section id="screen-viewer" class="screen">
+    <div id="viewer-container" class="viewer-container"></div>
+    <div id="scale-tool" class="scale-tool" hidden>
+      <p class="muted">Click two points on a reference object of known size, then enter its real-world length.</p>
+      <div class="row">
+        <span id="scale-points-status">Pick point A</span>
+        <input id="scale-distance" type="number" step="0.001" min="0" placeholder="length in meters" />
+        <button id="btn-apply-scale" class="btn-primary" disabled>Apply scale</button>
+      </div>
+    </div>
+    <div class="viewer-controls">
+      <button id="btn-toggle-scale" class="btn-secondary">Set real-world scale</button>
+      <a id="btn-download" class="btn-secondary" download>Download model</a>
+    </div>
+  </section>
+
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

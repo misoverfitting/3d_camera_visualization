@@ -1,0 +1,6 @@
+# Additional dependencies for the "compelling" Gaussian-splatting pipeline.
+# Requires a CUDA-capable GPU. Install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-gpu.txt
+-r requirements.txt
+torch>=2.2
+gsplat>=1.3

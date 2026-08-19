@@ -1,0 +1,33 @@
+# GPU image: adds the "compelling" Gaussian-splatting pipeline and
+# full-quality dense multi-view stereo for the "accurate" mesh pipeline.
+# Requires an NVIDIA GPU + the NVIDIA Container Toolkit on the host
+# (docker run --gpus all ...).
+#
+# The Ubuntu apt "colmap" package (used in the CPU Dockerfile) is *not*
+# built with CUDA support, so dense stereo silently falls back to a CPU
+# mesh there. This image instead starts from the official COLMAP image,
+# which is built with CUDA, and layers the Python/gsplat stack on top.
+#
+# NOTE: not build/run-tested in this repo's dev environment (no CUDA GPU
+# available there) - validate on your target GPU host before relying on it.
+FROM colmap/colmap:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY server/requirements.txt server/requirements-gpu.txt server/
+RUN pip install --no-cache-dir --break-system-packages \
+      -r server/requirements.txt -r server/requirements-gpu.txt
+
+COPY server server
+COPY web web
+
+ENV DATA_DIR=/data
+ENV CUDA_EXPECTED=1
+VOLUME ["/data"]
+EXPOSE 8000
+
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--app-dir", "server", "--host", "0.0.0.0", "--port", "8000"]
