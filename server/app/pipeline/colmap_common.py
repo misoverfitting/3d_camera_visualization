@@ -56,6 +56,8 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     sparse_dir = work / "sparse"
     sparse_dir.mkdir()
 
+    num_threads = str(config.COLMAP_NUM_THREADS)
+
     reporter.update("feature_extraction", "Extracting features from photos", 5)
     run([
         config.COLMAP_BIN, "feature_extractor",
@@ -64,6 +66,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_model", "SIMPLE_RADIAL",
         "--SiftExtraction.use_gpu", "0",
+        "--SiftExtraction.num_threads", num_threads,
     ], "Feature extraction")
 
     reporter.update("matching", "Matching features across photos", 20)
@@ -71,6 +74,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         config.COLMAP_BIN, "exhaustive_matcher",
         "--database_path", str(db_path),
         "--SiftMatching.use_gpu", "0",
+        "--SiftMatching.num_threads", num_threads,
     ], "Feature matching")
 
     reporter.update("sparse_reconstruction", "Estimating camera poses and sparse geometry (SfM)", 35)
@@ -79,6 +83,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         "--database_path", str(db_path),
         "--image_path", str(images_dir),
         "--output_path", str(sparse_dir),
+        "--Mapper.num_threads", num_threads,
     ], "Sparse reconstruction")
 
     model_dir = sparse_dir / "0"

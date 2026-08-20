@@ -19,5 +19,14 @@ COLMAP_BIN = os.environ.get("COLMAP_BIN", "colmap")
 GSPLAT_TRAIN_SCRIPT = os.environ.get("GSPLAT_TRAIN_SCRIPT")  # optional external trainer
 CUDA_EXPECTED = os.environ.get("CUDA_EXPECTED", "0") == "1"
 
+# COLMAP defaults its *.num_threads options to -1 ("auto", i.e. one thread
+# per core reported by the OS). In a lot of container platforms (Railway
+# included) that reports the underlying host's full core count rather than
+# the container's actual cgroup CPU quota, so COLMAP spins up hundreds of
+# threads on a container that may only have 1-2 real vCPUs - it thrashes
+# and typically fails outright. Cap it to a small, explicit number instead;
+# raise COLMAP_NUM_THREADS if you're running on a beefier host.
+COLMAP_NUM_THREADS = int(os.environ.get("COLMAP_NUM_THREADS", "4"))
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB per photo, generous for phone JPEGs
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
