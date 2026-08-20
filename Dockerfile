@@ -18,7 +18,10 @@ COPY server server
 COPY web web
 
 ENV DATA_DIR=/data
-VOLUME ["/data"]
+# No VOLUME instruction here - Railway rejects Dockerfiles that declare one
+# and manages the /data mount entirely through its own Volumes feature
+# instead (Settings -> Volumes -> mount path /data). Same effect, just
+# configured on Railway's side rather than baked into the image.
 EXPOSE 8000
 
 # Shell form so ${PORT} expands - Railway (and similar PaaS) inject PORT at
