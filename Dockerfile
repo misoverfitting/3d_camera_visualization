@@ -21,4 +21,7 @@ ENV DATA_DIR=/data
 VOLUME ["/data"]
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--app-dir", "server", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so ${PORT} expands - Railway (and similar PaaS) inject PORT at
+# runtime and route their public domain to whatever port the app actually
+# binds, rather than a fixed one. Falls back to 8000 for local `docker run`.
+CMD uvicorn app.main:app --app-dir server --host 0.0.0.0 --port ${PORT:-8000}
