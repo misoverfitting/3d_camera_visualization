@@ -69,12 +69,20 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         "--SiftExtraction.num_threads", num_threads,
     ], "Feature extraction")
 
+    # Frames now come from a single continuous orbit video (see
+    # video_extract.py), so their filename order is their true
+    # spatial/temporal order. sequential_matcher exploits that directly -
+    # each frame only needs matching against its near neighbors in the
+    # sequence, not every other frame - which is both much faster and more
+    # robust than exhaustive_matcher for this kind of input (less chance of
+    # a spurious match between two visually-similar-but-distant viewpoints).
     reporter.update("matching", "Matching features across photos", 20)
     run([
-        config.COLMAP_BIN, "exhaustive_matcher",
+        config.COLMAP_BIN, "sequential_matcher",
         "--database_path", str(db_path),
         "--SiftMatching.use_gpu", "0",
         "--SiftMatching.num_threads", num_threads,
+        "--SequentialMatching.overlap", "15",
     ], "Feature matching")
 
     reporter.update("sparse_reconstruction", "Estimating camera poses and sparse geometry (SfM)", 35)

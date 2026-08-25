@@ -42,9 +42,8 @@
   <section id="screen-capture" class="screen">
     <div class="camera-wrap">
       <video id="camera-video" autoplay playsinline muted></video>
-      <canvas id="capture-canvas" hidden></canvas>
       <div id="capture-hud" class="capture-hud">
-        <div id="shot-counter" class="shot-counter">0 photos</div>
+        <div id="rec-timer" class="shot-counter">Ready to record</div>
         <div id="capture-tip" class="capture-tip"></div>
       </div>
     </div>
@@ -54,17 +53,18 @@
       <ul>
         <li><strong>Lighting:</strong> even, diffuse light (overcast outdoor light is ideal). Avoid harsh or changing shadows.</li>
         <li><strong>Surface:</strong> matte, textured surfaces work best. Shiny/clear objects: dust with scanning spray or dry shampoo first.</li>
-        <li><strong>Coverage:</strong> aim for 60-150+ photos, heavy overlap, orbiting at multiple heights. Keep the object still and fill the frame.</li>
+        <li><strong>Coverage:</strong> record a slow, steady 20-40 second orbit around the object, sweeping from a bit above to a bit below eye level. Keep the object filling the frame and hold it still.</li>
         <li><strong>Scale:</strong> place a ruler or object of known size next to it if you'll need real-world dimensions.</li>
       </ul>
     </details>
 
+    <p id="extract-status" class="muted" hidden></p>
     <div class="thumbs" id="thumb-strip"></div>
 
     <div class="capture-controls">
       <button id="btn-switch-camera" class="icon-btn" aria-label="Switch camera">&#8635;</button>
-      <button id="btn-shutter" class="shutter-btn" aria-label="Capture photo"></button>
-      <button id="btn-done-capturing" class="btn-primary">Done</button>
+      <button id="btn-record" class="shutter-btn" aria-label="Start recording"></button>
+      <button id="btn-done-capturing" class="btn-primary" hidden>Continue</button>
     </div>
   </section>
 

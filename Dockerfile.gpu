@@ -13,7 +13,7 @@
 FROM colmap/colmap:latest
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip \
+      python3 python3-pip ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,7 +27,10 @@ COPY web web
 
 ENV DATA_DIR=/data
 ENV CUDA_EXPECTED=1
-VOLUME ["/data"]
+# No VOLUME instruction - some PaaS platforms (e.g. Railway) reject
+# Dockerfiles that declare one; mount persistent storage at /data through
+# the platform's own volume feature instead.
 EXPOSE 8000
 
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--app-dir", "server", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so ${PORT} expands for platforms that inject it at runtime.
+CMD python3 -m uvicorn app.main:app --app-dir server --host 0.0.0.0 --port ${PORT:-8000}

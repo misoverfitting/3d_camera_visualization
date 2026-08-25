@@ -1,5 +1,11 @@
 import { api } from "./api.js";
-import { CaptureController, tipForShotCount, counterClass, MIN_RECOMMENDED_PHOTOS } from "./capture.js";
+import {
+  CaptureController,
+  tipForElapsedSeconds,
+  timerClass,
+  MIN_RECORD_SECONDS,
+  MAX_RECORD_SECONDS,
+} from "./capture.js";
 import { MeshViewer, SplatViewer } from "./viewer.js";
 
 const screens = {
@@ -88,17 +94,15 @@ async function openSession(sessionId) {
   }
 }
 
-// ---------- Capture ----------
+// ---------- Capture (record a short orbit video, server extracts frames) ----------
 
-const capture = new CaptureController(
-  document.getElementById("camera-video"),
-  document.getElementById("capture-canvas")
-);
+const capture = new CaptureController(document.getElementById("camera-video"));
+let recordTimerHandle = null;
 
 async function startCapture(sessionId) {
   state.sessionId = sessionId;
   showScreen("capture");
-  await renderThumbs();
+  resetCaptureUi();
   try {
     await capture.start();
   } catch (err) {
@@ -106,13 +110,61 @@ async function startCapture(sessionId) {
   }
 }
 
-document.getElementById("btn-shutter").addEventListener("click", async () => {
-  const blob = await capture.capturePhoto();
-  const filename = `photo_${Date.now()}.jpg`;
-  const result = await api.uploadPhoto(state.sessionId, blob, filename);
-  state.photoCount = result.photo_count;
-  updateCaptureHud();
-  addThumb(blob);
+function resetCaptureUi() {
+  document.getElementById("thumb-strip").innerHTML = "";
+  document.getElementById("extract-status").hidden = true;
+  document.getElementById("btn-done-capturing").hidden = true;
+  document.getElementById("btn-record").disabled = false;
+  document.getElementById("btn-record").classList.remove("recording");
+  setRecTimerText("Ready to record", "");
+  document.getElementById("capture-tip").textContent = "";
+}
+
+function setRecTimerText(text, cssClass) {
+  const el = document.getElementById("rec-timer");
+  el.textContent = text;
+  el.className = `shot-counter ${cssClass}`;
+}
+
+document.getElementById("btn-record").addEventListener("click", async () => {
+  if (!capture.isRecording()) {
+    capture.startRecording();
+    document.getElementById("btn-record").classList.add("recording");
+    document.getElementById("btn-record").setAttribute("aria-label", "Stop recording");
+    document.getElementById("btn-done-capturing").hidden = true;
+    document.getElementById("extract-status").hidden = true;
+    document.getElementById("thumb-strip").innerHTML = "";
+    recordTimerHandle = setInterval(() => {
+      const elapsed = capture.elapsedSeconds();
+      setRecTimerText(`${elapsed.toFixed(0)}s`, timerClass(elapsed));
+      document.getElementById("capture-tip").textContent = tipForElapsedSeconds(elapsed);
+      if (elapsed >= MAX_RECORD_SECONDS) document.getElementById("btn-record").click();
+    }, 250);
+    return;
+  }
+
+  clearInterval(recordTimerHandle);
+  document.getElementById("btn-record").classList.remove("recording");
+  document.getElementById("btn-record").disabled = true;
+  document.getElementById("capture-tip").textContent = "";
+
+  const { blob, filename } = await capture.stopRecording();
+  const statusEl = document.getElementById("extract-status");
+  statusEl.hidden = false;
+  statusEl.textContent = "Uploading and extracting frames...";
+  try {
+    const result = await api.uploadVideo(state.sessionId, blob, filename);
+    state.photoCount = result.photo_count;
+    statusEl.textContent = `Extracted ${result.photo_count} sharp frames from your orbit.`;
+    await renderThumbs();
+    document.getElementById("btn-done-capturing").hidden = false;
+  } catch (err) {
+    statusEl.textContent = "Couldn't process that video: " + err.message + ". Try recording again.";
+  } finally {
+    setRecTimerText("Ready to record", "");
+    document.getElementById("btn-record").disabled = false;
+    document.getElementById("btn-record").setAttribute("aria-label", "Start recording");
+  }
 });
 
 document.getElementById("btn-switch-camera").addEventListener("click", () => capture.switchCamera());
@@ -123,38 +175,23 @@ document.getElementById("btn-done-capturing").addEventListener("click", async ()
   updatePhotoCountWarning(state.photoCount);
 });
 
-function updateCaptureHud() {
-  const counter = document.getElementById("shot-counter");
-  counter.textContent = `${state.photoCount} photo${state.photoCount === 1 ? "" : "s"}`;
-  counter.className = `shot-counter ${counterClass(state.photoCount)}`;
-  document.getElementById("capture-tip").textContent = tipForShotCount(state.photoCount);
-}
-
-function addThumb(blob) {
-  const img = document.createElement("img");
-  img.src = URL.createObjectURL(blob);
-  document.getElementById("thumb-strip").appendChild(img);
-}
-
 async function renderThumbs() {
   const strip = document.getElementById("thumb-strip");
   strip.innerHTML = "";
   const { photos } = await api.listPhotos(state.sessionId);
-  state.photoCount = photos.length;
   for (const name of photos) {
     const img = document.createElement("img");
     img.src = api.photoUrl(state.sessionId, name);
     strip.appendChild(img);
   }
-  updateCaptureHud();
 }
 
 function updatePhotoCountWarning(count) {
   const el = document.getElementById("photo-count-warning");
-  if (count < MIN_RECOMMENDED_PHOTOS) {
-    el.textContent = `Only ${count} photos captured - ${MIN_RECOMMENDED_PHOTOS}-150+ is recommended for reliable reconstruction.`;
+  if (count < 30) {
+    el.textContent = `Only ${count} frames extracted - try a longer, slower orbit (${MIN_RECORD_SECONDS}-${MAX_RECORD_SECONDS}s) for reliable reconstruction.`;
   } else {
-    el.textContent = `${count} photos captured. Good coverage.`;
+    el.textContent = `${count} frames extracted from your orbit. Good coverage.`;
   }
 }
 

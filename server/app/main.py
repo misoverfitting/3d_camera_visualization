@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, jobs, sessions
 from .models import JobProgress, ReconstructRequest, ScaleCalibration, SessionCreate, SessionInfo
-from .pipeline import colmap_pipeline, scale, splat_pipeline
+from .pipeline import colmap_pipeline, scale, splat_pipeline, video_extract
 
 app = FastAPI(title="Phone 3D Capture", version="0.1.0")
 
@@ -68,6 +68,40 @@ async def upload_photo(session_id: str, file: UploadFile):
     dest = session.photos_dir / f"{session.photo_count():05d}{ext}"
     dest.write_bytes(contents)
     return {"filename": dest.name, "photo_count": session.photo_count()}
+
+
+@app.post("/api/sessions/{session_id}/video")
+def upload_video(session_id: str, file: UploadFile):
+    """Accepts one orbit-video recording and replaces the session's photo
+    set with sharp frames extracted from it (see pipeline/video_extract.py).
+    Runs synchronously (this is a sync `def`, so FastAPI offloads it to a
+    worker thread) - a 20-40s video extracts in a few seconds, not long
+    enough to need the job-polling flow reconstruction uses."""
+    try:
+        session = sessions.get_session(session_id)
+    except sessions.SessionNotFound:
+        raise HTTPException(404, "Session not found")
+
+    ext = Path(file.filename or "capture.mp4").suffix.lower()
+    if ext not in config.ALLOWED_VIDEO_EXTS:
+        raise HTTPException(400, f"Unsupported video type {ext!r}")
+
+    contents = file.file.read()
+    if len(contents) > config.MAX_VIDEO_UPLOAD_BYTES:
+        raise HTTPException(400, "Video too large")
+
+    session.work_dir.mkdir(parents=True, exist_ok=True)
+    video_path = session.work_dir / f"capture{ext}"
+    video_path.write_bytes(contents)
+
+    try:
+        frame_count = video_extract.extract_frames(video_path, session.photos_dir)
+    except video_extract.VideoExtractError as exc:
+        raise HTTPException(400, str(exc))
+    finally:
+        video_path.unlink(missing_ok=True)
+
+    return {"photo_count": frame_count}
 
 
 @app.get("/api/sessions/{session_id}/photos")

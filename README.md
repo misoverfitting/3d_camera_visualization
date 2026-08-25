@@ -15,8 +15,8 @@ This app offers both, from one guided phone-camera capture session.
 
 ```bash
 pip install -r server/requirements.txt
-# COLMAP is required for reconstruction - on Debian/Ubuntu:
-sudo apt-get install colmap
+# COLMAP and ffmpeg are required - on Debian/Ubuntu:
+sudo apt-get install colmap ffmpeg
 
 uvicorn app.main:app --app-dir server --host 0.0.0.0 --port 8000
 ```
@@ -36,9 +36,11 @@ docker compose --profile gpu up app-gpu   # + GPU: compelling/Gaussian-splat pip
 
 ## What you get
 
-1. **Guided capture** - live camera view with a shot counter and coaching
-   (lighting, orbit height, overlap, scale-reference reminders) based on the
-   report's practical capture tips (`docs/CAPTURE_TIPS.md`).
+1. **Guided capture** - record one 15-60s orbit video (not 60-150 individual
+   photos) with live coaching (lighting, orbit height, scale-reference
+   reminders) based on the report's practical capture tips
+   (`docs/CAPTURE_TIPS.md`). The server picks the sharpest, best-spaced
+   frames from the video automatically (`server/app/pipeline/video_extract.py`).
 2. **Choose your result:**
    - *Compelling*: trains a 3D Gaussian Splat (via the open-source
      [gsplat](https://github.com/nerfstudio-project/gsplat)) for
@@ -61,9 +63,11 @@ See `docs/ARCHITECTURE.md` for how the pieces fit together.
 - [COLMAP](https://colmap.github.io/) on `PATH` (`apt install colmap`, or
   build with CUDA for full-quality dense stereo - the Ubuntu package is
   CPU-only)
+- `ffmpeg`/`ffprobe` on `PATH` (`apt install ffmpeg`) - used to turn the
+  captured orbit video into still frames
 - For splat mode: a CUDA GPU + `pip install -r server/requirements-gpu.txt`
-- A modern phone browser (Chrome/Safari) with camera access, served over
-  HTTPS or `localhost`
+- A modern phone browser (Chrome/Safari) with camera + `MediaRecorder`
+  support, served over HTTPS or `localhost`
 
 ## Development
 
@@ -73,10 +77,13 @@ cd server && python -m pytest tests/ -v
 ```
 
 `tests/test_api.py` covers the HTTP API without needing COLMAP.
-`tests/test_pipeline_synthetic.py` runs the real `colmap` pipeline
-end-to-end against a procedurally-rendered synthetic photo set (see
-`scripts/generate_synthetic_dataset.py` - no phone, camera, or GPU needed)
-and is skipped automatically if `colmap` isn't installed.
+`tests/test_pipeline_synthetic.py` and `tests/test_video_pipeline.py` run
+the real `colmap`/`ffmpeg` pipeline end-to-end against a
+procedurally-rendered synthetic photo set (see
+`scripts/generate_synthetic_dataset.py` - no phone, camera, or GPU needed),
+the latter through an actual encoded video to exercise the same path a real
+capture takes. Both are skipped automatically if their binary isn't
+installed.
 
 No frontend build step: `web/` is plain ES modules loaded via an import
 map. Vendored dependencies (three.js, GaussianSplats3D) live in

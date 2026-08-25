@@ -41,6 +41,13 @@ export const api = {
       fetch(`${API_BASE}/sessions/${sessionId}/photos`, { method: "POST", body: form })
     );
   },
+  uploadVideo(sessionId, blob, filename) {
+    const form = new FormData();
+    form.append("file", blob, filename);
+    return asJson(
+      fetch(`${API_BASE}/sessions/${sessionId}/video`, { method: "POST", body: form })
+    );
+  },
   listPhotos(sessionId) {
     return asJson(fetch(`${API_BASE}/sessions/${sessionId}/photos`));
   },

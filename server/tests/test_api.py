@@ -1,9 +1,12 @@
 """Fast tests for the session/photo/job HTTP API, independent of COLMAP."""
 import io
 import shutil
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
+
+FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
 
 
 @pytest.fixture()
@@ -79,6 +82,55 @@ def test_upload_rejects_bad_extension(client):
         f"/api/sessions/{session_id}/photos",
         files={"file": ("notes.txt", b"hello", "text/plain")},
     )
+    assert resp.status_code == 400
+
+
+def test_video_upload_rejects_bad_extension(client):
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    resp = client.post(
+        f"/api/sessions/{session_id}/video",
+        files={"file": ("notes.txt", b"hello", "text/plain")},
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg binary not installed")
+def test_video_upload_extracts_frames(client, tmp_path):
+    video_path = tmp_path / "test.mp4"
+    proc = subprocess.run(
+        [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=8:size=320x240:rate=30",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video_path),
+        ],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    with open(video_path, "rb") as f:
+        resp = client.post(
+            f"/api/sessions/{session_id}/video",
+            files={"file": ("orbit.mp4", f, "video/mp4")},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["photo_count"] > 0
+
+    photos = client.get(f"/api/sessions/{session_id}/photos").json()["photos"]
+    assert len(photos) == resp.json()["photo_count"]
+
+
+def test_video_upload_rejects_unparseable_video(client, tmp_path):
+    # A file with a video extension but not actually a video (ffprobe can't
+    # read a duration from it) should 400 with a clear message, not 500.
+    from PIL import Image
+    img_path = tmp_path / "not_really_a_video.jpg"
+    Image.new("RGB", (64, 64), (0, 0, 0)).save(img_path)
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    with open(img_path, "rb") as f:
+        resp = client.post(
+            f"/api/sessions/{session_id}/video",
+            files={"file": ("orbit.mp4", f, "video/mp4")},
+        )
     assert resp.status_code == 400
 
 

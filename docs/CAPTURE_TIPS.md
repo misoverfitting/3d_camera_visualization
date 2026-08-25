@@ -13,11 +13,14 @@ Gaussian splatting; for a mesh, coat the object with scanning spray (or dry
 shampoo) first, or prefer splat mode, which handles glass/reflections much
 better.
 
-**Coverage.** Take more photos than feels necessary - 60 to 150+ for a
-single object - with heavy overlap, orbiting at multiple heights. Keep the
-object still and fill the frame. The app's shot counter turns green once
-you've hit the recommended minimum, and periodically prompts you to change
-height as you orbit.
+**Coverage.** Record one continuous 15-60 second orbit around the object
+(30-40s is a good target) rather than a burst of individual photos - move
+slowly and steadily, sweep from a bit above to a bit below eye level, and
+keep the object filling the frame. The app extracts and picks the sharpest,
+best-spaced frames from the video automatically, which in practice gives
+more even coverage than trying to remember to tap a shutter 60-150 times.
+Moving too fast blurs individual frames, so slower is better than more
+ground covered.
 
 **Background.** A little background texture (a tabletop, a textured
 surface under the object) genuinely helps camera-pose estimation - an

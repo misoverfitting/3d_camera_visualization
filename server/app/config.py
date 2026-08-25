@@ -30,3 +30,6 @@ COLMAP_NUM_THREADS = int(os.environ.get("COLMAP_NUM_THREADS", "4"))
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB per photo, generous for phone JPEGs
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
+
+MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024  # a 20-40s phone orbit video easily runs 100MB+
+ALLOWED_VIDEO_EXTS = {".webm", ".mp4", ".mov", ".m4v"}

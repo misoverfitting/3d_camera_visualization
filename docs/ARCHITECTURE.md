@@ -21,24 +21,53 @@ Scaniverse, KIRI Engine) offer both from one photo set.
 ```
 Phone browser (web/)
   -> POST /api/sessions              create a capture session
-  -> POST /api/sessions/{id}/photos  upload each captured photo
+  -> POST /api/sessions/{id}/video   upload one recorded orbit video
+                                      (server extracts frames synchronously)
   -> POST /api/sessions/{id}/reconstruct   {mode: accurate|compelling}
   -> GET  /api/sessions/{id}/job     poll progress (2s interval)
   -> GET  /api/sessions/{id}/result/{file} download/view the model
   -> POST /api/sessions/{id}/scale   rescale mesh from a picked reference distance
 ```
 
+(`POST /api/sessions/{id}/photos` still exists for uploading individual
+images directly, e.g. for scripting/testing, but the capture UI no longer
+uses it - see "Why video, not individual photos" below.)
+
 `server/app/jobs.py` runs reconstruction in a background thread per
 session, writing progress to `job.json` on disk so status survives a
 server restart and needs no separate task queue (Redis, Celery, ...) for
 what is meant to stay a *simple* app.
 
+## Why video, not individual photos
+
+The app originally had users tap a shutter button 60-150 times. In
+practice that was the single biggest source of friction and of bad
+captures - people got bored partway through, or ended up with uneven,
+gappy coverage. Recording one slow ~20-40s orbit is much easier to do well
+and, done at a normal pace, naturally produces denser and more even
+coverage than manual tapping did.
+
+Raw video frames bring their own problem, though: many are motion-blurred,
+and you get far more of them than SfM needs. `server/app/pipeline/video_extract.py`
+handles this: `ffmpeg` extracts candidate frames at a fixed rate, then the
+video's duration is divided into evenly-spaced time buckets and the
+sharpest frame in each bucket (by variance of the Laplacian - a standard,
+cheap blur metric) is kept. That directly fights motion blur while keeping
+frames spread evenly across the whole orbit, targeting the same 60-150
+frame range that used to be manual.
+
+Because the surviving frames come from one continuous take, their
+filename order is also true spatiotemporal order - which is why the
+matching stage below switched from exhaustive to sequential matching.
+
 ## The accurate pipeline (`server/app/pipeline/colmap_pipeline.py`)
 
 Shells out to the `colmap` CLI:
 
-1. `feature_extractor` - SIFT features per photo
-2. `exhaustive_matcher` - cross-photo feature matching
+1. `feature_extractor` - SIFT features per frame
+2. `sequential_matcher` - matches each frame against its near neighbors in
+   capture order, rather than every other frame (`exhaustive_matcher`) -
+   faster and more robust now that frame order means something
 3. `mapper` - incremental structure-from-motion (camera poses + sparse points)
 4. `image_undistorter` - clean PINHOLE camera model for the next stages
 5. `patch_match_stereo` + `stereo_fusion` - dense multi-view stereo
@@ -79,8 +108,8 @@ vendored under `web/vendor/` (see `scripts/vendor-libs.sh`) rather than
 pulled from a CDN at runtime - keeps the app fully self-hosted and working
 offline/behind a firewall.
 
-- `capture.js` - camera access + shot-by-shot coaching (lighting/coverage
-  reminders, live shot counter)
+- `capture.js` - camera access + video recording via `MediaRecorder`, with
+  live coaching (lighting/orbit-height reminders, a recording timer)
 - `viewer.js` - `MeshViewer` (plain three.js scene) and `SplatViewer`
   (wraps `GaussianSplats3D.Viewer`); independent, only one is mounted per
   result
@@ -94,3 +123,6 @@ OpenGL/GPU) that renders a procedurally-textured object on a textured
 `server/tests/test_pipeline_synthetic.py` to exercise the real `colmap`
 pipeline end to end without needing a phone or a GPU, and doubles as a demo
 dataset if you want to try the app without scanning a physical object.
+`server/tests/test_video_pipeline.py` additionally encodes its output into
+an actual video with `ffmpeg` and runs it through `video_extract.py` too,
+exercising the exact path a real phone capture takes.
