@@ -16,7 +16,6 @@ wants without the user having to count anything.
 """
 from __future__ import annotations
 
-import json
 import shutil
 import subprocess
 import tempfile
@@ -43,17 +42,6 @@ def _run(cmd: list[str], step: str) -> subprocess.CompletedProcess:
     return proc
 
 
-def _probe_duration_seconds(video_path: Path) -> float:
-    proc = _run([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "json", str(video_path),
-    ], "Video probing")
-    try:
-        return float(json.loads(proc.stdout)["format"]["duration"])
-    except (KeyError, ValueError, json.JSONDecodeError) as exc:
-        raise VideoExtractError(f"Could not read video duration: {exc}") from exc
-
-
 def _sharpness(image_path: Path) -> float:
     """Variance of the Laplacian - low for blurry/flat images, high for
     sharp, detailed ones. Cheap, well-established blur metric."""
@@ -74,20 +62,13 @@ def extract_frames(
     If `target_frames` is omitted, it scales with video length (~3
     frames/second of footage) clamped to the recommended photo-count range,
     so a longer, more thorough orbit yields proportionally more frames
-    instead of always capping at the same number.
+    instead of always capping at the same number. Video length is estimated
+    from the number of frames ffmpeg actually decodes, not from container
+    metadata - browser-recorded WebM (MediaRecorder output) frequently has
+    no duration written in its header at all, which `ffprobe -show_entries
+    format=duration` then can't report, even though the video itself
+    decodes and extracts just fine.
     """
-    duration = _probe_duration_seconds(video_path)
-    if duration < 2.0:
-        raise VideoExtractError(
-            f"Video is only {duration:.1f}s long - record at least a few seconds "
-            "of slow orbiting around the object."
-        )
-
-    if target_frames is None:
-        target_frames = int(np.clip(
-            round(duration * 3), config.MIN_RECOMMENDED_PHOTOS, config.MAX_RECOMMENDED_PHOTOS
-        ))
-
     for existing in out_dir.glob("*"):
         existing.unlink()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,10 +84,19 @@ def extract_frames(
 
         candidates = sorted(tmp_dir.glob("candidate_*.jpg"))
         if len(candidates) < MIN_CANDIDATE_FRAMES:
+            estimated_duration = len(candidates) / CANDIDATE_FPS
             raise VideoExtractError(
-                f"Only extracted {len(candidates)} candidate frames from a "
-                f"{duration:.1f}s video - try recording a longer, slower orbit."
+                f"Only extracted {len(candidates)} usable frames (~{estimated_duration:.1f}s of "
+                "video) - record a longer, slower orbit, or check that the upload isn't corrupted."
             )
+
+        if target_frames is None:
+            estimated_duration = len(candidates) / CANDIDATE_FPS
+            target_frames = int(np.clip(
+                round(estimated_duration * 3),
+                config.MIN_RECOMMENDED_PHOTOS,
+                config.MAX_RECOMMENDED_PHOTOS,
+            ))
 
         num_buckets = min(target_frames, len(candidates))
         buckets = np.array_split(np.arange(len(candidates)), num_buckets)

@@ -119,6 +119,40 @@ def test_video_upload_extracts_frames(client, tmp_path):
     assert len(photos) == resp.json()["photo_count"]
 
 
+@pytest.mark.skipif(not FFMPEG_AVAILABLE, reason="ffmpeg binary not installed")
+def test_video_upload_handles_webm_with_no_duration_metadata(client, tmp_path):
+    # Regression test: browser MediaRecorder output (WebM) frequently has no
+    # Duration written in its Segment Info at all - ffprobe's
+    # format=duration then has nothing to report. Reproduce that by muxing
+    # to an unseekable pipe, which forces ffmpeg to skip the trailing
+    # Duration/Cues it would otherwise backpatch into a seekable file.
+    video_path = tmp_path / "no_duration.webm"
+    with open(video_path, "wb") as out:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=8:size=320x240:rate=24",
+                "-c:v", "libvpx", "-pix_fmt", "yuv420p", "-f", "webm", "pipe:1",
+            ],
+            stdout=out, stderr=subprocess.PIPE, text=True,
+        )
+    assert proc.returncode == 0, proc.stderr
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(video_path)],
+        capture_output=True, text=True,
+    )
+    assert '"duration"' not in probe.stdout, "test video unexpectedly has duration metadata"
+
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    with open(video_path, "rb") as f:
+        resp = client.post(
+            f"/api/sessions/{session_id}/video",
+            files={"file": ("orbit.webm", f, "video/webm")},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["photo_count"] > 0
+
+
 def test_video_upload_rejects_unparseable_video(client, tmp_path):
     # A file with a video extension but not actually a video (ffprobe can't
     # read a duration from it) should 400 with a clear message, not 500.
