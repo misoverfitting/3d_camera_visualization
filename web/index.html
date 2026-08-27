@@ -109,6 +109,22 @@
       <button id="btn-toggle-scale" class="btn-secondary">Set real-world scale</button>
       <a id="btn-download" class="btn-secondary" download>Download model</a>
     </div>
+
+    <details id="reprocess-card" class="tips-card">
+      <summary>Reprocess with a GPU for higher fidelity</summary>
+      <p class="muted">
+        This server may not have a GPU, so dense stereo and Gaussian splatting
+        can be limited or unavailable. Download this capture's photos, run this
+        app on a CUDA machine (see <code>Dockerfile.gpu</code>), then upload the
+        result back here to view it through this same link.
+      </p>
+      <div class="row">
+        <a id="btn-download-photos" class="btn-secondary" download>Download photos (.zip)</a>
+        <button id="btn-upload-result" class="btn-secondary">Upload reprocessed result</button>
+        <input id="input-upload-result" type="file" accept=".ply,.obj" hidden />
+      </div>
+      <p id="reprocess-status" class="muted"></p>
+    </details>
   </section>
 
 </main>

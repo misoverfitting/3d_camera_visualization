@@ -45,6 +45,17 @@ def _write(job_path: Path, data: dict) -> None:
     tmp.replace(job_path)
 
 
+def mark_done(session: Session, result_files: list[str], message: str = "Reconstruction complete") -> None:
+    """Directly marks a session's job as done with the given result files,
+    bypassing run_job/pipeline_fn - used when a result was produced outside
+    this server entirely (see the Reprocess-on-GPU-elsewhere upload path in
+    main.py) rather than by a pipeline function we ran ourselves."""
+    _write(session.job_path, {
+        "status": "done", "stage": "complete", "message": message,
+        "percent": 100, "result_files": result_files, "error": None,
+    })
+
+
 def read_job(session: Session) -> dict:
     if not session.job_path.exists():
         return {"status": "new", "stage": "", "message": "Not started", "percent": 0,

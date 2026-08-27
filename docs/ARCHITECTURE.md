@@ -27,6 +27,8 @@ Phone browser (web/)
   -> GET  /api/sessions/{id}/job     poll progress (2s interval)
   -> GET  /api/sessions/{id}/result/{file} download/view the model
   -> POST /api/sessions/{id}/scale   rescale mesh from a picked reference distance
+  -> GET  /api/sessions/{id}/photos.zip   download photos for reprocessing elsewhere
+  -> POST /api/sessions/{id}/result  upload a reprocessed result back in
 ```
 
 (`POST /api/sessions/{id}/photos` still exists for uploading individual
@@ -115,6 +117,33 @@ so than the object itself. This step removes it afterward instead:
 `reconstruction.json`'s `background_removal` field records what happened
 (whether a plane was found/removed, its point fraction, whether clustering
 further trimmed the result) for diagnosing a particular capture.
+
+## Reprocessing on a GPU machine
+
+A session's server rarely has a CUDA GPU (Railway doesn't offer one, for
+instance), which caps it to sparse-cloud CPU meshing and rules out splat
+mode entirely. Rather than requiring a GPU-equipped *server*, the app lets
+you move a capture to a GPU-equipped *anything* - your own PC, a rented GPU
+box - and bring the result back:
+
+1. `GET /api/sessions/{id}/photos.zip` - bundles the session's already-
+   extracted frames (`main.py::download_photos_zip`)
+2. Run this same app elsewhere with a CUDA GPU (`Dockerfile.gpu` / local
+   `requirements-gpu.txt`), create a session there, upload the downloaded
+   photos, and reconstruct in `compelling` mode (or `accurate` mode to get
+   full dense-MVS instead of the sparse-cloud fallback)
+3. `POST /api/sessions/{id}/result` - uploads the resulting `model.ply` /
+   `model.obj` / `splat.ply` back into the *original* session
+   (`main.py::upload_result`), which marks it done via
+   `jobs.mark_done()` - indistinguishable from a result the original server
+   had produced itself, so it's viewable through the same link the phone
+   capture used
+
+The web UI exposes this as the "Reprocess with a GPU" panel on the result
+screen (`web/app.js`'s upload-result handler), with a plain file input
+rather than anything fancier - `ALLOWED_RESULT_FILENAMES` in `config.py`
+matches uploads by exact filename against what the pipelines themselves
+produce, so there's no format negotiation to get wrong.
 
 ## The compelling pipeline (`server/app/pipeline/splat_pipeline.py`)
 

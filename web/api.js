@@ -61,6 +61,16 @@ export const api = {
   photoUrl(sessionId, filename) {
     return `${API_BASE}/sessions/${sessionId}/photos/${encodeURIComponent(filename)}`;
   },
+  photosZipUrl(sessionId) {
+    return `${API_BASE}/sessions/${sessionId}/photos.zip`;
+  },
+  uploadResult(sessionId, file) {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return asJson(
+      fetch(`${API_BASE}/sessions/${sessionId}/result`, { method: "POST", body: form })
+    );
+  },
   reconstruct(sessionId, mode) {
     return asJson(
       fetch(`${API_BASE}/sessions/${sessionId}/reconstruct`, {

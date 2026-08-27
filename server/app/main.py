@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, jobs, sessions
@@ -113,6 +115,34 @@ def list_photos(session_id: str):
     return {"photos": sorted(p.name for p in session.photos_dir.iterdir() if p.is_file())}
 
 
+@app.get("/api/sessions/{session_id}/photos.zip")
+def download_photos_zip(session_id: str):
+    """Bundles the session's extracted frames for download - the first half
+    of the Reprocess workflow: pull the photos down to a GPU-equipped
+    machine, run the accurate/compelling pipeline there (see
+    Dockerfile.gpu), then upload the result back via POST .../result."""
+    try:
+        session = sessions.get_session(session_id)
+    except sessions.SessionNotFound:
+        raise HTTPException(404, "Session not found")
+
+    photos = sorted(p for p in session.photos_dir.iterdir() if p.is_file())
+    if not photos:
+        raise HTTPException(400, "No photos to export")
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for photo in photos:
+            zf.write(photo, arcname=photo.name)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{session_id}_photos.zip"'},
+    )
+
+
 @app.get("/api/sessions/{session_id}/photos/{filename}")
 def get_photo(session_id: str, filename: str):
     try:
@@ -177,6 +207,43 @@ def get_result(session_id: str, filename: str):
     if session.output_dir.resolve() not in path.parents or not path.exists():
         raise HTTPException(404, "Result not found")
     return FileResponse(path, filename=filename)
+
+
+@app.post("/api/sessions/{session_id}/result")
+def upload_result(session_id: str, file: UploadFile):
+    """The second half of the Reprocess workflow: accepts a result file
+    (model.ply / model.obj / splat.ply) produced by running this same app
+    locally against the downloaded photos, and marks the session done with
+    it - so the higher-fidelity, GPU-processed result becomes viewable
+    through the same session/link the phone capture used, indistinguishable
+    from a result this server had produced itself."""
+    try:
+        session = sessions.get_session(session_id)
+    except sessions.SessionNotFound:
+        raise HTTPException(404, "Session not found")
+
+    filename = Path(file.filename or "").name
+    if filename not in config.ALLOWED_RESULT_FILENAMES:
+        raise HTTPException(
+            400,
+            f"Unsupported result filename {filename!r} - expected one of "
+            f"{sorted(config.ALLOWED_RESULT_FILENAMES)} (produced by "
+            "server/app/pipeline/colmap_pipeline.py or splat_pipeline.py)",
+        )
+
+    contents = file.file.read()
+    if len(contents) > config.MAX_RESULT_UPLOAD_BYTES:
+        raise HTTPException(400, "Result file too large")
+
+    session.output_dir.mkdir(parents=True, exist_ok=True)
+    (session.output_dir / filename).write_bytes(contents)
+
+    result_files = sorted(
+        p.name for p in session.output_dir.iterdir()
+        if p.is_file() and p.name in config.ALLOWED_RESULT_FILENAMES
+    )
+    jobs.mark_done(session, result_files, message="Reprocessed result uploaded")
+    return {"result_files": result_files}
 
 
 @app.post("/api/sessions/{session_id}/scale")

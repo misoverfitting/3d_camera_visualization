@@ -33,3 +33,12 @@ ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
 
 MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024  # a 20-40s phone orbit video easily runs 100MB+
 ALLOWED_VIDEO_EXTS = {".webm", ".mp4", ".mov", ".m4v"}
+
+# "Reprocess" workflow: download a session's photos to run the GPU-dependent
+# pipeline on another machine (see Dockerfile.gpu), then upload the result
+# back into this session so it's viewable through the same link. Result
+# files are matched by exact filename against what the pipelines themselves
+# produce (colmap_pipeline.py / splat_pipeline.py), so an upload here is
+# indistinguishable from one this server produced itself.
+ALLOWED_RESULT_FILENAMES = {"model.ply", "model.obj", "splat.ply"}
+MAX_RESULT_UPLOAD_BYTES = 1024 * 1024 * 1024  # dense meshes / splats can be large

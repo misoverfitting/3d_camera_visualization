@@ -251,6 +251,11 @@ async function showResult(sessionId) {
   const scaleToggle = document.getElementById("btn-toggle-scale");
   const downloadBtn = document.getElementById("btn-download");
 
+  const downloadPhotosBtn = document.getElementById("btn-download-photos");
+  downloadPhotosBtn.href = api.photosZipUrl(sessionId);
+  downloadPhotosBtn.setAttribute("download", `${sessionId}_photos.zip`);
+  document.getElementById("reprocess-status").textContent = "";
+
   if (splatFile) {
     const viewer = new SplatViewer(container);
     await viewer.load(api.resultUrl(sessionId, splatFile));
@@ -299,6 +304,31 @@ document.getElementById("btn-apply-scale").addEventListener("click", async () =>
   const [a, b] = state.scalePoints;
   await api.applyScale(state.sessionId, [a.x, a.y, a.z], [b.x, b.y, b.z], distance);
   await showResult(state.sessionId);
+});
+
+// ---------- Reprocess (download photos -> process on a GPU machine -> upload result back) ----------
+
+document.getElementById("btn-upload-result").addEventListener("click", () => {
+  document.getElementById("input-upload-result").click();
+});
+
+document.getElementById("input-upload-result").addEventListener("change", async (ev) => {
+  const file = ev.target.files[0];
+  ev.target.value = ""; // allow re-selecting the same filename later
+  if (!file) return;
+
+  const statusEl = document.getElementById("reprocess-status");
+  statusEl.textContent = `Uploading ${file.name}...`;
+  try {
+    const result = await api.uploadResult(state.sessionId, file);
+    // showResult() re-renders the viewer and resets this status text, so
+    // the success message has to be set *after* it resolves, not before -
+    // otherwise it flashes and is immediately wiped.
+    await showResult(state.sessionId);
+    statusEl.textContent = `Uploaded. Now showing ${result.result_files.join(", ")}.`;
+  } catch (err) {
+    statusEl.textContent = "Upload failed: " + err.message;
+  }
 });
 
 // ---------- Boot ----------

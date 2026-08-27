@@ -76,6 +76,54 @@ def test_photo_upload_and_delete(client):
     assert resp.json()["photo_count"] == 1
 
 
+def test_reprocess_download_and_upload_round_trip(client):
+    # Download half: bundle a session's photos for reprocessing elsewhere.
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    jpeg = _tiny_jpeg_bytes()
+    for name in ("a.jpg", "b.jpg"):
+        client.post(f"/api/sessions/{session_id}/photos", files={"file": (name, jpeg, "image/jpeg")})
+
+    resp = client.get(f"/api/sessions/{session_id}/photos.zip")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/zip"
+    import zipfile
+    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    assert sorted(zf.namelist()) == ["00000.jpg", "00001.jpg"]
+
+    # Upload half: a locally-reprocessed result comes back and the session
+    # is marked done with it, as if this server had produced it.
+    fake_ply = b"ply\nformat ascii 1.0\nelement vertex 0\nend_header\n"
+    resp = client.post(
+        f"/api/sessions/{session_id}/result",
+        files={"file": ("model.ply", fake_ply, "application/octet-stream")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["result_files"] == ["model.ply"]
+
+    job = client.get(f"/api/sessions/{session_id}/job").json()
+    assert job["status"] == "done"
+    assert job["result_files"] == ["model.ply"]
+
+    result = client.get(f"/api/sessions/{session_id}/result/model.ply")
+    assert result.status_code == 200
+    assert result.content == fake_ply
+
+
+def test_reprocess_zip_rejects_empty_session(client):
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    resp = client.get(f"/api/sessions/{session_id}/photos.zip")
+    assert resp.status_code == 400
+
+
+def test_reprocess_upload_rejects_unexpected_filename(client):
+    session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
+    resp = client.post(
+        f"/api/sessions/{session_id}/result",
+        files={"file": ("not_a_real_result.ply", b"whatever", "application/octet-stream")},
+    )
+    assert resp.status_code == 400
+
+
 def test_upload_rejects_bad_extension(client):
     session_id = client.post("/api/sessions", json={"name": "t"}).json()["id"]
     resp = client.post(

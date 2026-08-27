@@ -54,6 +54,11 @@ docker compose --profile gpu up app-gpu   # + GPU: compelling/Gaussian-splat pip
 4. **Real-world scale calibration** - click two points on a reference
    object of known size in the viewer, enter its length, and the mesh gets
    rescaled to true metric units.
+5. **Reprocess on a GPU machine** - hosting this on a CPU-only server (e.g.
+   Railway)? Download a finished capture's photos from the result screen,
+   run this app locally with a CUDA GPU (`Dockerfile.gpu`) for full dense-
+   MVS or splat quality, then upload the result back to view it through the
+   same link.
 
 See `docs/ARCHITECTURE.md` for how the pieces fit together.
 
