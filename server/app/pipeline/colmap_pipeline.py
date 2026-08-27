@@ -16,8 +16,11 @@ from __future__ import annotations
 import json
 import shutil
 
+import open3d as o3d
+
 from ..jobs import ProgressReporter
 from ..sessions import Session
+from . import background_removal
 from . import colmap_common as cc
 from . import mesh_fallback
 
@@ -30,6 +33,7 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter) -> list[
     dense_dir = sfm.dense_workspace_dir
     mesh_ply = session.work_dir / "mesh.ply"
     used_dense = False
+    bg_stats: dict = {}
     colmap_bin = cc.config.COLMAP_BIN
 
     if cc.dense_stereo_available():
@@ -47,6 +51,11 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter) -> list[
                 "--workspace_path", str(dense_dir),
                 "--output_path", str(fused_ply),
             ], "Stereo fusion")
+
+            reporter.update("background_removal", "Removing background (floor/tabletop)", 84)
+            fused_pcd = o3d.io.read_point_cloud(str(fused_ply))
+            fused_pcd, bg_stats = background_removal.isolate_foreground(fused_pcd)
+            o3d.io.write_point_cloud(str(fused_ply), fused_pcd)
 
             reporter.update("meshing", "Building surface mesh (Poisson)", 88)
             cc.run([
@@ -72,7 +81,7 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter) -> list[
             "--output_path", str(sparse_ply),
             "--output_type", "PLY",
         ], "Sparse model export")
-        mesh_fallback.mesh_from_point_cloud(sparse_ply, mesh_ply)
+        _, bg_stats = mesh_fallback.mesh_from_point_cloud(sparse_ply, mesh_ply)
 
     reporter.update("export", "Exporting final model files", 95)
     final_ply = output / "model.ply"
@@ -87,5 +96,6 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter) -> list[
         "mode": "accurate",
         "used_dense_mvs": used_dense,
         "photo_count": session.photo_count(),
+        "background_removal": bg_stats,
     }, indent=2))
     return result_files

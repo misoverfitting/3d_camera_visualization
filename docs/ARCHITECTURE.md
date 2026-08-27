@@ -72,13 +72,49 @@ Shells out to the `colmap` CLI:
 4. `image_undistorter` - clean PINHOLE camera model for the next stages
 5. `patch_match_stereo` + `stereo_fusion` - dense multi-view stereo
    (**requires CUDA**)
-6. `poisson_mesher` - dense point cloud &rarr; watertight mesh
+6. `background_removal.isolate_foreground()` - strips the floor/tabletop
+   out of the fused point cloud (see below) before meshing
+7. `poisson_mesher` - dense point cloud &rarr; watertight mesh
 
 If step 5 isn't available (no CUDA), `mesh_fallback.py` builds a mesh
 directly from the sparse point cloud via Open3D's Poisson reconstruction
-instead - lower fidelity, but keeps the app fully functional on a CPU-only
-host, matching how the commercial apps use cloud GPU workers for this stage
-and only degrade gracefully without one.
+instead (still applying the same background-removal step) - lower fidelity,
+but keeps the app fully functional on a CPU-only host, matching how the
+commercial apps use cloud GPU workers for this stage and only degrade
+gracefully without one.
+
+### Background removal (`server/app/pipeline/background_removal.py`)
+
+There's no foreground/background distinction anywhere upstream of this -
+SfM/MVS reconstructs everything visible in every frame with equal
+priority, and deliberately so (see the "Background" capture tip: some
+surrounding texture genuinely helps camera-pose estimation). The tradeoff
+is that the floor or tabletop, being large, flat, and visible in nearly
+every frame, ends up heavily represented in the point cloud - often more
+so than the object itself. This step removes it afterward instead:
+
+1. RANSAC plane segmentation finds the single largest planar surface, and
+   removes it *if* it's at least 25% of all points - evidence it's
+   something the camera saw constantly, not an incidental flat facet on
+   the object. There's deliberately no upper cap on that fraction: a wide,
+   well-textured floor legitimately can be 90%+ of all points when the
+   object is small relative to how much floor the camera saw, which is
+   exactly when removing it matters most. The real safety net is a floor
+   on how many points must survive - if removing the plane would leave too
+   few, the whole cloud is kept untouched instead.
+2. The RANSAC flatness tolerance scales with the point cloud's own
+   bounding-box diagonal (1%), not its point spacing - flatness is a
+   question of scale, not sampling density. A densely-sampled curved
+   object has *tighter* point spacing than a coarsely-sampled floor, so
+   scaling tolerance to spacing would make curved surfaces look flatter
+   than the real floor and risk misidentifying them as background.
+3. DBSCAN clustering then keeps only the largest remaining connected
+   component, on the assumption that the object is the largest contiguous
+   piece of geometry left once the floor is gone.
+
+`reconstruction.json`'s `background_removal` field records what happened
+(whether a plane was found/removed, its point fraction, whether clustering
+further trimmed the result) for diagnosing a particular capture.
 
 ## The compelling pipeline (`server/app/pipeline/splat_pipeline.py`)
 

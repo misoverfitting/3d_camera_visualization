@@ -26,7 +26,10 @@ ground covered.
 surface under the object) genuinely helps camera-pose estimation - an
 object floating in front of a blank wall gives structure-from-motion
 nothing to anchor distant parallax to. It doesn't need to be dramatic; a
-consistent background is enough.
+consistent background is enough. In "accurate" mode, the app automatically
+detects and strips the dominant floor/tabletop plane out of the final mesh
+afterward, so you don't need to worry about it ending up in your model -
+capture with a helpful background, then let it clean up.
 
 **Scale.** Photogrammetry has no inherent sense of scale. If true
 dimensions matter, place a ruler or an object of known size in the scene,

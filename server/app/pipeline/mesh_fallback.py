@@ -12,8 +12,10 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 
+from . import background_removal
 
-def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9) -> Path:
+
+def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9) -> tuple[Path, dict]:
     pcd = o3d.io.read_point_cloud(str(ply_path))
     if len(pcd.points) < 50:
         raise RuntimeError(
@@ -22,6 +24,12 @@ def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9
         )
 
     pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    pcd, bg_stats = background_removal.isolate_foreground(pcd)
+    if len(pcd.points) < 50:
+        raise RuntimeError(
+            f"Only {len(pcd.points)} points left after removing background - too "
+            "sparse to mesh. Capture more overlapping photos of the object."
+        )
 
     distances = pcd.compute_nearest_neighbor_distance()
     avg_spacing = float(np.mean(distances)) if len(distances) else 0.01
@@ -45,7 +53,7 @@ def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9
     mesh.remove_degenerate_triangles()
 
     o3d.io.write_triangle_mesh(str(out_path), mesh, write_vertex_colors=True)
-    return out_path
+    return out_path, bg_stats
 
 
 def convert_to_obj(ply_path: Path, out_path: Path) -> Path | None:
