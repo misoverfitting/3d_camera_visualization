@@ -1,5 +1,5 @@
 Pod::Spec.new do |s|
-  s.name = 'TareCapture'
+  s.name = 'TareCaptureNative'
   s.version = '0.1.0'
   s.summary = 'Native ARKit RGB and pose capture for Tare'
   s.description = s.summary

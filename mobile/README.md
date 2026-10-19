@@ -37,9 +37,11 @@ npx expo install --check
 npx expo-modules-autolinking resolve --platform apple
 ```
 
-The autolinking output must contain `tare-capture-native`, `TareCapture`, and
+The autolinking output must contain `tare-capture-native`, `TareCaptureNative`, and
 `TareCaptureModule`. Dependencies are locked in package-lock.json. ZIPFoundation
 is linked by the local podspec for native ZIP export.
+The native pod is named `TareCaptureNative` to avoid colliding with the app's
+`TareCapture` Xcode scheme, which is explicitly selected in both EAS profiles.
 
 ## First cloud build and TestFlight
 
