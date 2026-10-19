@@ -43,6 +43,7 @@ public class TareCaptureModule: Module {
       Events("onStatus")
       Prop("recording") { (view: TareCaptureView, value: Bool) in view.setRecording(value) }
       Prop("regionSize") { (view: TareCaptureView, value: Double) in view.setSize(value) }
+      Prop("captureWithoutBox") { (view: TareCaptureView, value: Bool) in view.captureWithoutBox = value }
     }
   }
 }
@@ -62,6 +63,11 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   private var region: simd_float4x4?
   private var size: Float = 1
   private var box: SCNNode?
+  var captureWithoutBox = false
+  private var surfaces: [UUID: SCNNode] = [:]
+  private var trackingDescription = "initializing"
+  private var placementHint: String?
+  private var hintUntil: TimeInterval = 0
   private var folder: URL?
   private var startTime: TimeInterval = 0
   private var lastSample: TimeInterval = -.infinity
@@ -79,6 +85,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     preview.session.delegate = self
     preview.session.delegateQueue = .main
     preview.automaticallyUpdatesLighting = true
+    preview.debugOptions = [.showFeaturePoints]
     preview.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(selectRegion(_:))))
     notification = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
       object: nil, queue: .main) { [weak self] _ in
@@ -120,20 +127,63 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     size = Float(min(3, max(0.25, value))); drawBox()
   }
   @objc private func selectRegion(_ tap: UITapGestureRecognizer) {
-    guard !recording, !finishing,
-      let query = preview.raycastQuery(from: tap.location(in: preview), allowing: .estimatedPlane, alignment: .horizontal),
-      let hit = preview.session.raycast(query).first else { return }
+    guard !recording, !finishing else { return }
+    guard let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState else {
+      showPlacementHint("Tracking is not ready. Move slowly sideways over a well-lit, textured table.")
+      return
+    }
+    var result: ARRaycastResult?
+    for target in [ARRaycastQuery.Target.existingPlaneGeometry, .estimatedPlane] {
+      if let query = preview.raycastQuery(from: tap.location(in: preview), allowing: target, alignment: .horizontal),
+         let hit = preview.session.raycast(query).first { result = hit; break }
+    }
+    guard let hit = result else {
+      showPlacementHint("No horizontal surface at that tap. Look downward, move sideways, then tap a cyan surface. You can also skip the box.")
+      return
+    }
     // World-aligned box starts at the selected support surface and extends upward.
     var transform = matrix_identity_float4x4
     transform.columns.3 = hit.worldTransform.columns.3
     region = transform
-    drawBox(); emit("Scan box placed. Adjust size, then start.")
+    drawBox(); showPlacementHint("Scan box placed. Adjust size, then start.")
+  }
+  private func showPlacementHint(_ message: String) {
+    placementHint = message
+    hintUntil = (preview.session.currentFrame?.timestamp ?? 0) + 6
+    emit(message)
+  }
+  // ARSession callbacks are delivered on the main delegate queue.
+  func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { updateSurfaces(anchors) }
+  func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { updateSurfaces(anchors) }
+  func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+    for anchor in anchors { surfaces.removeValue(forKey: anchor.identifier)?.removeFromParentNode() }
+  }
+  private func updateSurfaces(_ anchors: [ARAnchor]) {
+    for anchor in anchors {
+      guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal else { continue }
+      let node = surfaces[plane.identifier] ?? SCNNode()
+      if node.parent == nil { preview.scene.rootNode.addChildNode(node) }
+      let geometry = SCNPlane(width: CGFloat(max(plane.extent.x, 0.01)), height: CGFloat(max(plane.extent.z, 0.01)))
+      geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.25)
+      geometry.firstMaterial?.lightingModel = .constant
+      geometry.firstMaterial?.isDoubleSided = true
+      geometry.firstMaterial?.writesToDepthBuffer = false
+      node.childNodes.forEach { $0.removeFromParentNode() }
+      let patch = SCNNode(geometry: geometry)
+      patch.eulerAngles.x = -.pi / 2
+      patch.simdPosition = plane.center
+      node.addChildNode(patch)
+      node.simdTransform = plane.transform
+      surfaces[plane.identifier] = node
+    }
   }
   private func drawBox() {
     box?.removeFromParentNode()
     guard let region else { return }
     let geometry = SCNBox(width: CGFloat(size), height: CGFloat(size), length: CGFloat(size), chamferRadius: 0)
     geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan
+    geometry.firstMaterial?.lightingModel = .constant
+    geometry.firstMaterial?.isDoubleSided = true
     geometry.firstMaterial?.fillMode = .lines
     let node = SCNNode(geometry: geometry)
     node.simdTransform = region
@@ -144,8 +194,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     if !value { finish(reason: "Recording saved"); return }
     guard !recording else { return }
     guard !finishing else { emit("Wait for the recording to finish saving.", extra: ["recording": false]); return }
-    guard let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState, let region else {
-      emit("Wait for normal tracking and place the scan box first.", extra: ["recording": false]); return
+    guard let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState,
+      region != nil || captureWithoutBox else {
+      emit("Wait for normal tracking, then place a box or choose Skip box.", extra: ["recording": false]); return
     }
     do {
       let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -157,9 +208,12 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
         "device": UIDevice.current.model, "system_version": UIDevice.current.systemVersion,
         "world_units": "meters", "matrix_layout": "column_major", "pose": "camera_to_world",
         "camera_axes": "+X right, +Y up, -Z forward", "image_orientation": "native_sensor_unrotated",
-        "depth_available": false, "region": ["origin": [region.columns.3.x, region.columns.3.y, region.columns.3.z],
-          "size_m": size, "convention": "world aligned; origin at bottom center"],
+        "depth_available": false,
         "max_frames": 240, "sample_interval_seconds": 0.5]
+      if let region {
+        manifest["region"] = ["origin": [region.columns.3.x, region.columns.3.y, region.columns.3.z],
+          "size_m": size, "convention": "world aligned; origin at bottom center"]
+      } else { manifest["region"] = NSNull() }
       recording = true; UIApplication.shared.isIdleTimerDisabled = true
       emit("Recording. Orbit slowly and keep the object stationary.", extra: ["recording": true])
     } catch { emit("Cannot create recording: \(error)", extra: ["recording": false]) }
@@ -171,9 +225,19 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     case .notAvailable: tracking = "unavailable"
     case .limited(let reason): tracking = "limited: \(reason)"
     }
+    trackingDescription = tracking
     if frame.timestamp - lastStatus > 1 {
       lastStatus = frame.timestamp
-      emit(recording ? "Recording — \(count) frames saved" : "Tap the support surface to place the scan box.", extra: ["tracking": tracking])
+      let message: String
+      if recording { message = "Recording — \(count) frames saved" }
+      else if finishing { message = "Saving recording…" }
+      else if let placementHint, frame.timestamp < hintUntil { message = placementHint }
+      else if tracking != "normal" { message = "Move slowly sideways over a well-lit, textured table to initialize tracking." }
+      else if region != nil { message = "Scan box placed. Adjust size, then start." }
+      else if captureWithoutBox { message = "Ready to capture without a scan box. No region will be saved." }
+      else if surfaces.isEmpty { message = "Finding a table or floor. Look downward and move sideways; cyan patches mark detected surfaces." }
+      else { message = "Tap a cyan surface near the object to place the scan box." }
+      emit(message)
     }
     guard recording else { return }
     if frame.timestamp - startTime >= 120 || count >= 240 { finish(reason: "Capture limit reached; recording saved"); return }
@@ -229,7 +293,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
   func session(_ session: ARSession, didFailWithError error: Error) { finish(reason: "AR session failed: \(error)"); emit("AR session error: \(error)") }
   private func emit(_ message: String, extra: [String: Any] = [:]) {
-    var event: [String: Any] = ["message": message, "frames": count, "region": region != nil]
+    var event: [String: Any] = ["message": message, "frames": count, "region": region != nil,
+      "tracking": trackingDescription, "surfaces": surfaces.count]
     event.merge(extra) { _, new in new }; onStatus(event)
   }
   private func floats(_ m: simd_float4x4) -> [Float] {

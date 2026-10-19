@@ -20,6 +20,10 @@ working local Mac is required for the cloud workflow.
   iOS share sheet. Recordings are accessible through Files/file sharing. No
   automatic server upload or deletion; manage old scans in Files.
 - Desktop manifest/image validator and COLMAP known-pose TXT export.
+- Cyan overlays show estimated horizontal plane extents; feature points and
+  surface counts help diagnose tracking. A failed tap reports guidance instead
+  of silently returning. Skip box permits normally tracked RGB/pose recording
+  without waiting for plane detection; in that case `region` is JSON null.
 
 This does not yet implement dense reconstruction, pose refinement, background
 cropping, or upload into the current web sessions. The scan box is saved metadata
@@ -72,8 +76,10 @@ Build/signing/submission have not been executed from this checkout.
 ## Device acceptance check
 
 1. Grant camera permission. Move the phone until tracking reads normal.
-2. Tap a textured horizontal support surface near a stationary matte object.
-   Adjust the box to contain the object. Failed raycasts leave Start disabled.
+2. Look downward and move slowly sideways over a textured horizontal support
+   surface. Tap a cyan patch near a stationary matte object, then adjust the box.
+   Check failed-tap feedback and surface counts. If no plane is found, choose
+   Skip box and verify that capture works with normal tracking and a null region.
 3. Record a slow orbit with height changes. Stop and export the recording ZIP
    to Files/cloud storage. Ensure the JPEGs contain the real camera image only,
    without the preview's wireframe overlay.
