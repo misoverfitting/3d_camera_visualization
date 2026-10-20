@@ -92,5 +92,3 @@ def export_colmap(data: dict, output: Path, identities: dict | None = None) -> N
     # Blank POINTS2D line per pose is required by COLMAP's text format.
     (output / 'images.txt').write_text('\n'.join(images) + '\n', encoding='utf-8')
     (output / 'points3D.txt').write_text('', encoding='utf-8')
-
-
