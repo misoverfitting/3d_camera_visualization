@@ -66,9 +66,11 @@ def read_cameras_txt(path: Path) -> dict[int, CameraModel]:
 
 def read_images_txt(path: Path) -> dict[int, ImagePose]:
     images = {}
-    lines = [l for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
+    lines = [l for l in path.read_text().splitlines() if not l.lstrip().startswith("#")]
     # images.txt alternates: pose line, then a POINTS2D line, for each image.
     for i in range(0, len(lines), 2):
+        if not lines[i].strip():
+            raise ValueError('Missing image pose line in COLMAP images.txt')
         parts = lines[i].split()
         image_id = int(parts[0])
         qvec = np.array([float(p) for p in parts[1:5]])

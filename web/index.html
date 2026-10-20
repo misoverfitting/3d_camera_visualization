@@ -36,6 +36,11 @@
       <button type="submit" class="btn-primary">New Scan</button>
     </form>
     <ul id="session-list" class="session-list"></ul>
+    <form id="form-import-recording">
+      <label>Import iPhone recording ZIP <input id="recording-zip" type="file" accept=".zip" required /></label>
+      <button type="submit" class="btn-primary">Import scan</button>
+      <p id="import-status" role="status"></p>
+    </form>
   </section>
 
   <!-- CAPTURE -->
@@ -70,6 +75,7 @@
 
   <!-- MODE SELECTION -->
   <section id="screen-mode" class="screen">
+    <label><input id="allow-sparse-preview" type="checkbox" /> Allow a coarse sparse preview if dense reconstruction is unavailable (native scans)</label>
     <h2>Choose your result</h2>
     <div class="mode-cards">
       <button class="mode-card" data-mode="compelling">
@@ -96,6 +102,7 @@
 
   <!-- VIEWER -->
   <section id="screen-viewer" class="screen">
+    <p id="result-quality" role="status"></p>
     <div id="viewer-container" class="viewer-container"></div>
     <div id="scale-tool" class="scale-tool" hidden>
       <p class="muted">Click two points on a reference object of known size, then enter its real-world length.</p>
@@ -120,6 +127,7 @@
       </p>
       <div class="row">
         <a id="btn-download-photos" class="btn-secondary" download>Download photos (.zip)</a>
+        <a id="btn-download-native" class="btn-secondary" download hidden>Download native recording with poses (.zip)</a>
         <button id="btn-upload-result" class="btn-secondary">Upload reprocessed result</button>
         <input id="input-upload-result" type="file" accept=".ply,.obj" hidden />
       </div>

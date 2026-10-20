@@ -25,10 +25,13 @@ working local Mac is required for the cloud workflow.
   of silently returning. Skip box permits normally tracked RGB/pose recording
   without waiting for plane detection; in that case `region` is JSON null.
 
-This does not yet implement dense reconstruction, pose refinement, background
-cropping, or upload into the current web sessions. The scan box is saved metadata
-for later reconstruction constraints. No performance/quality improvement is
-claimed before a real-device capture and comparison.
+Exported ZIPs can now be imported through the web app's Import scan form. The
+server validates the recording, creates a native session, triangulates with fixed
+ARKit poses and feeds the existing mesh/splat backends. Native mesh reconstruction
+requires working CUDA dense stereo by default; coarse CPU preview is explicit.
+The recorded box crops the reconstructed cloud, not the original images. Pose
+refinement and texture baking remain future work. See docs/NATIVE_RECONSTRUCTION.md
+for the complete workflow and verification limits.
 
 ## Install and check on Windows
 
@@ -97,10 +100,9 @@ python scripts/test_arkit_recording.py
 Those commands run from the repository root. Validation needs Pillow; optional
 COLMAP export also needs NumPy (both are already server requirements).
 Keep the scan root as the image root when using exported COLMAP image names.
-The export contains empty observations/points and is not itself a reconstructed
-model; a known-pose triangulation/dense pipeline must be added next. The current
-server's COLMAP TXT reader removes blank observation lines, so do not feed this
-export directly to its Gaussian-splat reader without updating that reader.
+The standalone export contains empty observations/points and is not itself a
+reconstructed model. Import the recording ZIP through the server to extract and
+match features, use database-assigned IDs, and triangulate those observations.
 
 ## Recording contract version 1
 

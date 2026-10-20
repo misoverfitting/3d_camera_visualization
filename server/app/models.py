@@ -19,6 +19,7 @@ class SessionInfo(BaseModel):
     created_at: str
     photo_count: int
     status: str
+    source: str = 'rgb'
 
 
 class PhotoUploadResult(BaseModel):
@@ -28,6 +29,7 @@ class PhotoUploadResult(BaseModel):
 
 class ReconstructRequest(BaseModel):
     mode: ReconstructionMode = "accurate"
+    allow_sparse_fallback: bool = False
 
 
 class JobProgress(BaseModel):

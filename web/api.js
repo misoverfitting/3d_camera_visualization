@@ -16,6 +16,14 @@ async function asJson(respPromise) {
 }
 
 export const api = {
+  importRecording(file) {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return asJson(fetch(`${API_BASE}/recordings`, { method: 'POST', body: form }));
+  },
+  diagnostics(id) {
+    return asJson(fetch(`${API_BASE}/sessions/${id}/diagnostics`));
+  },
   createSession(name) {
     return asJson(
       fetch(`${API_BASE}/sessions`, {
@@ -71,12 +79,12 @@ export const api = {
       fetch(`${API_BASE}/sessions/${sessionId}/result`, { method: "POST", body: form })
     );
   },
-  reconstruct(sessionId, mode) {
+  reconstruct(sessionId, mode, allowSparseFallback = false) {
     return asJson(
       fetch(`${API_BASE}/sessions/${sessionId}/reconstruct`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, allow_sparse_fallback: allowSparseFallback }),
       })
     );
   },

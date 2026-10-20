@@ -44,6 +44,23 @@ btnBack.addEventListener("click", () => {
 });
 
 // ---------- Sessions list ----------
+document.getElementById('form-import-recording').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  const file = document.getElementById('recording-zip').files[0];
+  if (!file) return;
+  const status = document.getElementById('import-status');
+  button.disabled = true;
+  status.textContent = 'Uploading and validating recording…';
+  try {
+    const session = await api.importRecording(file);
+    status.textContent = `Imported ${session.photo_count} frames with native camera poses.`;
+    await refreshSessions();
+    await openSession(session.id);
+  } catch (error) { status.textContent = `Import failed: ${error.message}`; }
+  finally { button.disabled = false; }
+});
 
 async function refreshSessions() {
   const list = document.getElementById("session-list");
@@ -200,7 +217,7 @@ function updatePhotoCountWarning(count) {
 document.querySelectorAll(".mode-card").forEach((card) => {
   card.addEventListener("click", async () => {
     const mode = card.dataset.mode;
-    await api.reconstruct(state.sessionId, mode);
+    await api.reconstruct(state.sessionId, mode, document.getElementById('allow-sparse-preview').checked);
     showScreen("progress");
     pollJob(state.sessionId);
   });
@@ -242,6 +259,15 @@ async function showResult(sessionId) {
   showScreen("viewer");
   const job = await api.getJob(sessionId);
   const files = job.result_files || [];
+  const quality = document.getElementById('result-quality');
+  quality.textContent = '';
+  try {
+    const diagnostics = await api.diagnostics(sessionId);
+    const mesh = diagnostics['reconstruction.json'];
+    if (mesh) quality.textContent = mesh.used_dense_mvs
+      ? 'Dense mesh reconstructed. Check dimensions and completeness before use.'
+      : 'Coarse sparse preview only — detailed geometry was not reconstructed.';
+  } catch { quality.textContent = 'Reconstruction quality information unavailable.'; }
   const splatFile = files.find((f) => f.endsWith("splat.ply"));
   const meshFile = files.find((f) => f === "model.ply") || files.find((f) => f === "model.obj");
 
@@ -252,6 +278,10 @@ async function showResult(sessionId) {
   const downloadBtn = document.getElementById("btn-download");
 
   const downloadPhotosBtn = document.getElementById("btn-download-photos");
+  const nativeDownload = document.getElementById('btn-download-native');
+  const session = await api.getSession(sessionId);
+  nativeDownload.hidden = session.source !== 'arkit_rgb';
+  nativeDownload.href = `/api/sessions/${sessionId}/recording.zip`;
   downloadPhotosBtn.href = api.photosZipUrl(sessionId);
   downloadPhotosBtn.setAttribute("download", `${sessionId}_photos.zip`);
   document.getElementById("reprocess-status").textContent = "";

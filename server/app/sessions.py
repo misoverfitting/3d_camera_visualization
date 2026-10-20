@@ -64,6 +64,7 @@ class Session:
             "created_at": self.created_at,
             "photo_count": self.photo_count(),
             "status": status,
+            "source": 'arkit_rgb' if (self.root / 'arkit.json').exists() else 'rgb',
         }
 
 

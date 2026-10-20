@@ -10,3 +10,4 @@ mobile/ios/
 mobile/android/
 mobile/dist/
 mobile/.build-temp/
+.pytest-*/

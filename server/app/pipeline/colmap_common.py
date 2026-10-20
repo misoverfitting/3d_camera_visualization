@@ -27,8 +27,11 @@ def run(cmd: list[str], step: str) -> subprocess.CompletedProcess:
 
 
 def dense_stereo_available() -> bool:
-    proc = subprocess.run([config.COLMAP_BIN, "-h"], capture_output=True, text=True)
-    return "without CUDA" not in (proc.stdout + proc.stderr)
+    try:
+        proc = subprocess.run([config.COLMAP_BIN, "-h"], capture_output=True, text=True)
+    except FileNotFoundError:
+        return False
+    return proc.returncode == 0 and "without CUDA" not in (proc.stdout + proc.stderr)
 
 
 @dataclass
@@ -51,6 +54,10 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
+    session.output_dir.mkdir(exist_ok=True)
+    if (session.root / 'arkit.json').exists():
+        from .arkit_pipeline import run_known_poses
+        return run_known_poses(session, reporter)
 
     db_path = work / "database.db"
     sparse_dir = work / "sparse"
