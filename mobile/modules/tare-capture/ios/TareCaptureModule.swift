@@ -51,7 +51,7 @@ public class TareCaptureModule: Module {
 
 enum CaptureError: Error { case invalidRecording, imageEncoding }
 
-final class TareCaptureView: ExpoView, ARSessionDelegate {
+final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   let onStatus = EventDispatcher()
   private let preview = ARSCNView(frame: .zero)
   private let coaching = ARCoachingOverlayView(frame: .zero)
@@ -68,6 +68,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   var captureWithoutBox = false
   private var surfaces: [UUID: SCNNode] = [:]
   private var trackingDescription = "initializing"
+  private var horizontalPlanes = 0
   private var verticalPlanes = 0
   private var featurePoints = 0
   private var resetToken = 0
@@ -90,6 +91,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     addSubview(preview)
     preview.session.delegate = self
     preview.session.delegateQueue = .main
+    preview.delegate = self
+    preview.isPlaying = true
+    preview.rendersContinuously = true
     preview.automaticallyUpdatesLighting = true
     preview.debugOptions = [.showFeaturePoints]
     preview.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(selectRegion(_:))))
@@ -144,7 +148,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
       AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
     region = nil; box?.removeFromParentNode(); box = nil
     surfaces.values.forEach { $0.removeFromParentNode() }; surfaces.removeAll()
-    verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
+    horizontalPlanes = 0; verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
     placementHint = nil; hintUntil = 0; lastStatus = 0
     runSession(reset: true)
     emit("Tracking restarted. Point down at a textured table and move slowly sideways.")
@@ -179,41 +183,73 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     hintUntil = (preview.session.currentFrame?.timestamp ?? 0) + 6
     emit(message)
   }
-  // ARSession callbacks are delivered on the main delegate queue.
-  func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { updateSurfaces(anchors) }
-  func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { updateSurfaces(anchors) }
-  func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-    for anchor in anchors { surfaces.removeValue(forKey: anchor.identifier)?.removeFromParentNode() }
+  // SceneKit supplies the anchor node and maintains its world transform. Serialize
+  // our overlay bookkeeping with the ARSession delegate and React props on main.
+  func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+    scheduleSurfaceUpdate(anchor, node: node)
   }
-  private func updateSurfaces(_ anchors: [ARAnchor]) {
-    for anchor in anchors {
-      guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal else { continue }
-      let node = surfaces[plane.identifier] ?? SCNNode()
-      if node.parent == nil { preview.scene.rootNode.addChildNode(node) }
-      let geometry = SCNPlane(width: CGFloat(max(plane.extent.x, 0.01)), height: CGFloat(max(plane.extent.z, 0.01)))
-      geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
-      geometry.firstMaterial?.lightingModel = .constant
-      geometry.firstMaterial?.isDoubleSided = true
-      geometry.firstMaterial?.writesToDepthBuffer = false
-      geometry.firstMaterial?.readsFromDepthBuffer = false
-      node.childNodes.forEach { $0.removeFromParentNode() }
-      let patch = SCNNode(geometry: geometry)
-      patch.renderingOrder = 10
-      patch.eulerAngles.x = -.pi / 2
-      patch.simdPosition = plane.center
-      node.addChildNode(patch)
-      node.simdTransform = plane.transform
-      surfaces[plane.identifier] = node
+  func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+    scheduleSurfaceUpdate(anchor, node: node)
+  }
+  private func scheduleSurfaceUpdate(_ anchor: ARAnchor, node: SCNNode) {
+    guard let plane = anchor as? ARPlaneAnchor, plane.alignment == .horizontal else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self,
+        let current = self.preview.session.currentFrame?.anchors.first(where: { $0.identifier == plane.identifier }) as? ARPlaneAnchor,
+        self.preview.node(for: current) === node else { return }
+      self.updateSurface(current, anchorNode: node)
+    }
+  }
+  private func surfaceMaterial(alpha: CGFloat) -> SCNMaterial {
+    let material = SCNMaterial()
+    material.diffuse.contents = UIColor.cyan.withAlphaComponent(alpha)
+    material.lightingModel = .constant
+    material.isDoubleSided = true
+    material.blendMode = .alpha
+    material.readsFromDepthBuffer = false
+    material.writesToDepthBuffer = false
+    return material
+  }
+  private func updateSurface(_ plane: ARPlaneAnchor, anchorNode: SCNNode) {
+    guard let device = preview.device else { return }
+    let overlay: SCNNode
+    let geometry: ARSCNPlaneGeometry
+    if let existing = surfaces[plane.identifier], let mesh = existing.geometry as? ARSCNPlaneGeometry {
+      overlay = existing; geometry = mesh
+    } else {
+      guard let mesh = ARSCNPlaneGeometry(device: device) else { return }
+      geometry = mesh
+      geometry.materials = [surfaceMaterial(alpha: 0.5)]
+      overlay = SCNNode(geometry: geometry)
+      overlay.name = "tare.detected-plane"
+      overlay.renderingOrder = 10
+      // ARSCNPlaneGeometry already uses the anchor's x/z coordinates. Applying
+      // plane.center or rotating it again would displace/rotate the actual mesh.
+      overlay.position.y = 0.003
+      surfaces[plane.identifier] = overlay
+    }
+    geometry.update(from: plane.geometry)
+    if overlay.parent !== anchorNode {
+      overlay.removeFromParentNode(); anchorNode.addChildNode(overlay)
+    }
+    overlay.childNodes.forEach { $0.removeFromParentNode() }
+    let vertices = plane.geometry.boundaryVertices.map { SCNVector3($0.x, $0.y + 0.002, $0.z) }
+    if vertices.count >= 3 {
+      let indices: [Int32] = (0..<vertices.count).flatMap { [Int32($0), Int32(($0 + 1) % vertices.count)] }
+      let border = SCNGeometry(sources: [SCNGeometrySource(vertices: vertices)],
+        elements: [SCNGeometryElement(indices: indices, primitiveType: .line)])
+      border.materials = [surfaceMaterial(alpha: 1)]
+      let edge = SCNNode(geometry: border); edge.renderingOrder = 11
+      overlay.addChildNode(edge)
     }
   }
   private func drawBox() {
     box?.removeFromParentNode()
     guard let region else { return }
     let geometry = SCNBox(width: CGFloat(size), height: CGFloat(size), length: CGFloat(size), chamferRadius: 0)
-    geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan
-    geometry.firstMaterial?.lightingModel = .constant
-    geometry.firstMaterial?.isDoubleSided = true
-    geometry.firstMaterial?.fillMode = .lines
+    let material = surfaceMaterial(alpha: 1)
+    material.fillMode = .lines
+    geometry.materials = [material]
     let node = SCNNode(geometry: geometry)
     node.simdTransform = region
     node.position.y += size / 2
@@ -265,7 +301,10 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
       for id in Array(surfaces.keys) where !horizontalIDs.contains(id) {
         surfaces.removeValue(forKey: id)?.removeFromParentNode()
       }
-      updateSurfaces(planes)
+      for plane in planes where plane.alignment == .horizontal {
+        if let anchorNode = preview.node(for: plane) { updateSurface(plane, anchorNode: anchorNode) }
+      }
+      horizontalPlanes = horizontalIDs.count
       verticalPlanes = planes.filter { $0.alignment == .vertical }.count
       featurePoints = frame.rawFeaturePoints?.points.count ?? 0
       let needsCoaching = horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
@@ -277,7 +316,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
       else if tracking != "normal" { message = "Move slowly sideways over a well-lit, textured table to initialize tracking." }
       else if region != nil { message = "Scan box placed. Adjust size, then start." }
       else if captureWithoutBox { message = "Ready to capture without a scan box. No region will be saved." }
-      else if surfaces.isEmpty { message = "Finding a table or floor. Look downward and move sideways; cyan patches mark detected surfaces." }
+      else if horizontalPlanes == 0 { message = "Finding a table or floor. Look downward and move sideways; cyan patches mark detected surfaces." }
       else { message = "Tap a cyan surface near the object to place the scan box." }
       emit(message)
     }
@@ -335,8 +374,14 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
   func session(_ session: ARSession, didFailWithError error: Error) { finish(reason: "AR session failed: \(error)"); emit("AR session error: \(error)") }
   private func emit(_ message: String, extra: [String: Any] = [:]) {
+    let inView: Int
+    if let camera = preview.pointOfView {
+      inView = surfaces.values.filter { $0.parent != nil && preview.isNode($0, insideFrustumOf: camera) }.count
+    } else { inView = 0 }
     var event: [String: Any] = ["message": message, "frames": count, "region": region != nil,
-      "tracking": trackingDescription, "surfaces": surfaces.count,
+      "tracking": trackingDescription, "surfaces": horizontalPlanes,
+      "overlays": surfaces.count, "overlaysInView": inView,
+      "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
       "walls": verticalPlanes, "points": featurePoints, "saving": finishing]
     event.merge(extra) { _, new in new }; onStatus(event)
   }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 
-type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean };
+type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
 const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null> }>('TareCapture');
@@ -21,7 +21,7 @@ export default function App() {
       .catch(error => setStatus({ message: `Could not load saved recordings: ${error}` }));
   }, []);
   return <SafeAreaView style={styles.page}>
-    <Text style={styles.title}>Tare Capture</Text>
+    <Text style={styles.title}>Tare Capture{status.build ? ` · Build ${status.build}` : ''}</Text>
     <Text style={styles.copy}>Look downward and move slowly sideways over a textured table. Tap a cyan surface near the object, or skip the box.</Text>
     <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} onStatus={({ nativeEvent: e }) => {
       setStatus(e);
@@ -32,6 +32,7 @@ export default function App() {
     <Text style={styles.copy}>{status.message}</Text>
     <Text style={styles.copy}>Tracking: {status.tracking || 'initializing'} · Surfaces: {status.surfaces || 0} · Frames: {status.frames || 0}</Text>
     <Text style={styles.copy}>Walls: {status.walls || 0} · Feature points: {status.points || 0}</Text>
+    <Text style={styles.copy}>Surface overlays: {status.overlays || 0} · In view: {status.overlaysInView || 0}</Text>
     <Button title="Restart surface detection" disabled={recording || status.saving} onPress={() => setResetToken(value => value + 1)} />
     <View style={styles.row}>
       <Button title="Smaller box" disabled={recording} onPress={() => setSize(Math.max(0.25, size - 0.25))} />
