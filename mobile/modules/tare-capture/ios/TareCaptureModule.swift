@@ -44,6 +44,7 @@ public class TareCaptureModule: Module {
       Prop("recording") { (view: TareCaptureView, value: Bool) in view.setRecording(value) }
       Prop("regionSize") { (view: TareCaptureView, value: Double) in view.setSize(value) }
       Prop("captureWithoutBox") { (view: TareCaptureView, value: Bool) in view.captureWithoutBox = value }
+      Prop("resetToken") { (view: TareCaptureView, value: Int) in view.resetTracking(value) }
     }
   }
 }
@@ -53,6 +54,7 @@ enum CaptureError: Error { case invalidRecording, imageEncoding }
 final class TareCaptureView: ExpoView, ARSessionDelegate {
   let onStatus = EventDispatcher()
   private let preview = ARSCNView(frame: .zero)
+  private let coaching = ARCoachingOverlayView(frame: .zero)
   private let writer = DispatchQueue(label: "tare.recording.writer", qos: .utility)
   private let imageContext = CIContext()
   private var notification: NSObjectProtocol?
@@ -66,6 +68,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   var captureWithoutBox = false
   private var surfaces: [UUID: SCNNode] = [:]
   private var trackingDescription = "initializing"
+  private var verticalPlanes = 0
+  private var featurePoints = 0
+  private var resetToken = 0
   private var placementHint: String?
   private var hintUntil: TimeInterval = 0
   private var folder: URL?
@@ -81,12 +86,20 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
+    preview.scene = SCNScene()
     addSubview(preview)
     preview.session.delegate = self
     preview.session.delegateQueue = .main
     preview.automaticallyUpdatesLighting = true
     preview.debugOptions = [.showFeaturePoints]
     preview.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(selectRegion(_:))))
+    coaching.session = preview.session
+    coaching.goal = .horizontalPlane
+    // Drive coaching from the same live anchor snapshot as the surface counter.
+    // Keep taps available for estimated-plane raycasts while coaching is visible.
+    coaching.activatesAutomatically = false
+    coaching.isUserInteractionEnabled = false
+    addSubview(coaching)
     notification = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification,
       object: nil, queue: .main) { [weak self] _ in
         self?.finish(reason: "App interrupted; recording saved")
@@ -104,7 +117,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     if let foregroundNotification { NotificationCenter.default.removeObserver(foregroundNotification) }
     preview.session.pause()
   }
-  override func layoutSubviews() { super.layoutSubviews(); preview.frame = bounds }
+  override func layoutSubviews() {
+    super.layoutSubviews(); preview.frame = bounds; coaching.frame = bounds
+  }
   override func didMoveToWindow() {
     super.didMoveToWindow()
     guard window != nil else { finish(reason: "Camera closed; recording saved"); preview.session.pause(); return }
@@ -117,10 +132,22 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
       }
     }
   }
-  private func runSession() {
+  private func runSession(reset: Bool = false) {
     let config = ARWorldTrackingConfiguration()
     config.planeDetection = [.horizontal, .vertical]
-    preview.session.run(config)
+    preview.session.run(config, options: reset ? [.resetTracking, .removeExistingAnchors] : [])
+  }
+  func resetTracking(_ token: Int) {
+    guard token != resetToken else { return }
+    resetToken = token
+    guard !recording, !finishing, window != nil,
+      AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
+    region = nil; box?.removeFromParentNode(); box = nil
+    surfaces.values.forEach { $0.removeFromParentNode() }; surfaces.removeAll()
+    verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
+    placementHint = nil; hintUntil = 0; lastStatus = 0
+    runSession(reset: true)
+    emit("Tracking restarted. Point down at a textured table and move slowly sideways.")
   }
   func setSize(_ value: Double) {
     guard !recording, !finishing, value.isFinite else { return }
@@ -164,12 +191,14 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
       let node = surfaces[plane.identifier] ?? SCNNode()
       if node.parent == nil { preview.scene.rootNode.addChildNode(node) }
       let geometry = SCNPlane(width: CGFloat(max(plane.extent.x, 0.01)), height: CGFloat(max(plane.extent.z, 0.01)))
-      geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.25)
+      geometry.firstMaterial?.diffuse.contents = UIColor.systemCyan.withAlphaComponent(0.45)
       geometry.firstMaterial?.lightingModel = .constant
       geometry.firstMaterial?.isDoubleSided = true
       geometry.firstMaterial?.writesToDepthBuffer = false
+      geometry.firstMaterial?.readsFromDepthBuffer = false
       node.childNodes.forEach { $0.removeFromParentNode() }
       let patch = SCNNode(geometry: geometry)
+      patch.renderingOrder = 10
       patch.eulerAngles.x = -.pi / 2
       patch.simdPosition = plane.center
       node.addChildNode(patch)
@@ -228,6 +257,19 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
     trackingDescription = tracking
     if frame.timestamp - lastStatus > 1 {
       lastStatus = frame.timestamp
+      // Reconcile the complete live anchor list, including anchors whose initial
+      // callback may have arrived before this view was ready. Zero now means the
+      // frame contains no horizontal planes, rather than no callbacks received.
+      let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
+      let horizontalIDs = Set(planes.filter { $0.alignment == .horizontal }.map { $0.identifier })
+      for id in Array(surfaces.keys) where !horizontalIDs.contains(id) {
+        surfaces.removeValue(forKey: id)?.removeFromParentNode()
+      }
+      updateSurfaces(planes)
+      verticalPlanes = planes.filter { $0.alignment == .vertical }.count
+      featurePoints = frame.rawFeaturePoints?.points.count ?? 0
+      let needsCoaching = horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
+      if coaching.isActive != needsCoaching { coaching.setActive(needsCoaching, animated: true) }
       let message: String
       if recording { message = "Recording — \(count) frames saved" }
       else if finishing { message = "Saving recording…" }
@@ -294,7 +336,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate {
   func session(_ session: ARSession, didFailWithError error: Error) { finish(reason: "AR session failed: \(error)"); emit("AR session error: \(error)") }
   private func emit(_ message: String, extra: [String: Any] = [:]) {
     var event: [String: Any] = ["message": message, "frames": count, "region": region != nil,
-      "tracking": trackingDescription, "surfaces": surfaces.count]
+      "tracking": trackingDescription, "surfaces": surfaces.count,
+      "walls": verticalPlanes, "points": featurePoints, "saving": finishing]
     event.merge(extra) { _, new in new }; onStatus(event)
   }
   private func floats(_ m: simd_float4x4) -> [Float] {
