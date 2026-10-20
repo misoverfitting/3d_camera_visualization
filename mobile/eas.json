@@ -4,5 +4,5 @@
     "preview": { "distribution": "internal", "ios": { "simulator": false, "scheme": "TareCapture" } },
     "production": { "autoIncrement": true, "ios": { "scheme": "TareCapture" } }
   },
-  "submit": { "production": {} }
+  "submit": { "production": { "ios": { "ascAppId": "6824637632" } } }
 }
