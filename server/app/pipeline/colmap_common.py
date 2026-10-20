@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,16 @@ from ..jobs import ProgressReporter
 from ..sessions import Session
 
 MIN_PHOTOS_FOR_SFM = 8
+
+
+@lru_cache(maxsize=4)
+def feature_option_prefixes(binary: str) -> tuple[str, str]:
+    """COLMAP 4 renamed SIFT command options; retain older deployments."""
+    help_result = subprocess.run([binary, 'feature_extractor', '-h'], capture_output=True, text=True)
+    help_text = help_result.stdout + help_result.stderr
+    if '--FeatureExtraction.use_gpu' in help_text:
+        return 'FeatureExtraction', 'FeatureMatching'
+    return 'SiftExtraction', 'SiftMatching'
 
 
 class PipelineError(RuntimeError):
@@ -64,6 +75,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     sparse_dir.mkdir()
 
     num_threads = str(config.COLMAP_NUM_THREADS)
+    extraction_options, matching_options = feature_option_prefixes(config.COLMAP_BIN)
 
     reporter.update("feature_extraction", "Extracting features from photos", 5)
     run([
@@ -72,8 +84,8 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         "--image_path", str(images_dir),
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_model", "SIMPLE_RADIAL",
-        "--SiftExtraction.use_gpu", "0",
-        "--SiftExtraction.num_threads", num_threads,
+        f"--{extraction_options}.use_gpu", "0",
+        f"--{extraction_options}.num_threads", num_threads,
     ], "Feature extraction")
 
     # Frames now come from a single continuous orbit video (see
@@ -87,8 +99,8 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     run([
         config.COLMAP_BIN, "sequential_matcher",
         "--database_path", str(db_path),
-        "--SiftMatching.use_gpu", "0",
-        "--SiftMatching.num_threads", num_threads,
+        f"--{matching_options}.use_gpu", "0",
+        f"--{matching_options}.num_threads", num_threads,
         "--SequentialMatching.overlap", "15",
     ], "Feature matching")
 

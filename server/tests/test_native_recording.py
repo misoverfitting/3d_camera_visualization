@@ -87,6 +87,34 @@ def test_empty_colmap_observation_lines_preserved(tmp_path):
     assert list(read_images_txt(model)) == [1, 2]
 
 
+def test_empty_dense_mesh_is_not_reported_as_success(client, monkeypatch):
+    import open3d as o3d
+    from types import SimpleNamespace
+    from app import sessions
+    from app.pipeline import colmap_common as cc, colmap_pipeline as pipeline
+    response = client.post('/api/recordings', files={'file': ('scan.zip', make_zip())})
+    session = sessions.get_session(response.json()['id'])
+    dense = session.work_dir / 'dense'
+    (dense / 'sparse').mkdir(parents=True)
+    monkeypatch.setattr(cc, 'dense_stereo_available', lambda: True)
+    monkeypatch.setattr(cc, 'run_sfm_and_undistort', lambda *a: SimpleNamespace(dense_workspace_dir=dense, undistorted_model_dir=dense / 'sparse'))
+    monkeypatch.setattr(pipeline.background_removal, 'isolate_foreground', lambda cloud: (cloud, {}))
+    def command(args, step):
+        if args[1] == 'stereo_fusion':
+            cloud = o3d.geometry.PointCloud()
+            cloud.points = o3d.utility.Vector3dVector(np.random.default_rng(9).normal(size=(100,3)))
+            o3d.io.write_point_cloud(str(dense / 'fused.ply'), cloud)
+        if args[1] == 'poisson_mesher':
+            assert '--PoissonMeshing.trim' in args
+            (session.work_dir / 'mesh.ply').write_text('ply\nformat ascii 1.0\nelement vertex 0\nelement face 0\nend_header\n')
+    monkeypatch.setattr(cc, 'run', command)
+    with pytest.raises(cc.PipelineError, match='degenerate'):
+        pipeline.run_accurate_pipeline(session, SimpleNamespace(update=lambda *a: None), allow_sparse_fallback=False)
+    metadata = json.loads((session.output_dir / 'reconstruction.json').read_text())
+    assert metadata['quality'] == 'failed' and not metadata['used_dense_mvs']
+    assert not (session.output_dir / 'model.ply').exists()
+
+
 def test_crop_is_in_arkit_world_coordinates():
     import open3d as o3d
     from app.pipeline.arkit_pipeline import crop_cloud

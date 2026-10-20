@@ -51,6 +51,7 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
             'photo_count': session.photo_count(), 'background_removal': bg_stats,
             'region_applied': crop_applied, 'elapsed_seconds': time.perf_counter() - started,
             'stage_seconds': timings,
+            'poisson_depth': cc.config.POISSON_DEPTH, 'poisson_trim': cc.config.POISSON_TRIM,
         }, indent=2))
 
     dense_available = cc.dense_stereo_available()
@@ -103,7 +104,13 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
                 colmap_bin, "poisson_mesher",
                 "--input_path", str(fused_ply),
                 "--output_path", str(mesh_ply),
+                '--PoissonMeshing.depth', str(cc.config.POISSON_DEPTH),
+                '--PoissonMeshing.trim', str(cc.config.POISSON_TRIM),
+                '--PoissonMeshing.num_threads', str(cc.config.COLMAP_NUM_THREADS),
             ], "Poisson meshing")
+            dense_mesh = o3d.io.read_triangle_mesh(str(mesh_ply))
+            if len(dense_mesh.vertices) < 50 or len(dense_mesh.triangles) < 50:
+                raise cc.PipelineError('Dense meshing produced empty or degenerate geometry; inspect meshing settings and capture coverage')
             timings['meshing'] = time.perf_counter() - stage_started
             used_dense = True
         except cc.PipelineError as exc:

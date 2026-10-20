@@ -11,3 +11,4 @@ mobile/android/
 mobile/dist/
 mobile/.build-temp/
 .pytest-*/
+.tools/

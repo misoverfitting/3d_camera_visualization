@@ -13,6 +13,10 @@ This app offers both, from one guided phone-camera capture session.
 
 ## Quick start
 
+For the Windows desktop GPU mesh setup, use `scripts/setup_gpu.ps1` followed by
+`scripts/start_gpu.ps1`. See `docs/WINDOWS_GPU.md` for the native iPhone recording
+workflow, runtime verification, and GPU-versus-hosted-server distinction.
+
 ```bash
 pip install -r server/requirements.txt
 # COLMAP and ffmpeg are required - on Debian/Ubuntu:
