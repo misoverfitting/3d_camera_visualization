@@ -28,6 +28,11 @@ CUDA_EXPECTED = os.environ.get("CUDA_EXPECTED", "0") == "1"
 # raise COLMAP_NUM_THREADS if you're running on a beefier host.
 COLMAP_NUM_THREADS = int(os.environ.get("COLMAP_NUM_THREADS", "4"))
 
+# COLMAP's absolute density trim default (10) can erase smaller scans entirely.
+# Keep it configurable; a non-empty mesh still needs visual quality inspection.
+POISSON_DEPTH = int(os.environ.get('POISSON_DEPTH', '10'))
+POISSON_TRIM = float(os.environ.get('POISSON_TRIM', '0'))
+
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25MB per photo, generous for phone JPEGs
 ALLOWED_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
 

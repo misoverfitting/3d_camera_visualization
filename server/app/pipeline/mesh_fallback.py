@@ -15,7 +15,7 @@ import open3d as o3d
 from . import background_removal
 
 
-def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9) -> tuple[Path, dict]:
+def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9, region=None) -> tuple[Path, dict]:
     pcd = o3d.io.read_point_cloud(str(ply_path))
     if len(pcd.points) < 50:
         raise RuntimeError(
@@ -24,6 +24,9 @@ def mesh_from_point_cloud(ply_path: Path, out_path: Path, poisson_depth: int = 9
         )
 
     pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+    if region:
+        from .arkit_pipeline import crop_cloud
+        pcd = crop_cloud(pcd, region)
     pcd, bg_stats = background_removal.isolate_foreground(pcd)
     if len(pcd.points) < 50:
         raise RuntimeError(

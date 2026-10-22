@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import zipfile
+import json
+import tempfile
+from functools import partial
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
@@ -10,6 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, jobs, sessions
+from . import native_import
 from .models import JobProgress, ReconstructRequest, ScaleCalibration, SessionCreate, SessionInfo
 from .pipeline import colmap_pipeline, scale, splat_pipeline, video_extract
 
@@ -21,6 +25,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.post('/api/recordings', response_model=SessionInfo)
+def upload_recording(file: UploadFile):
+    try:
+        return native_import.import_recording(file.file).to_info()
+    except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, RuntimeError) as exc:
+        raise HTTPException(400, f'Invalid recording: {exc}') from exc
+
+
+def _native_inputs_are_readonly(session):
+    if (session.root / 'arkit.json').exists():
+        raise HTTPException(409, 'Native recording inputs are immutable; import a new recording instead')
 
 
 @app.post("/api/sessions", response_model=SessionInfo)
@@ -60,6 +77,7 @@ async def upload_photo(session_id: str, file: UploadFile):
         raise HTTPException(404, "Session not found")
 
     ext = Path(file.filename or "photo.jpg").suffix.lower()
+    _native_inputs_are_readonly(session)
     if ext not in config.ALLOWED_IMAGE_EXTS:
         raise HTTPException(400, f"Unsupported file type {ext!r}")
 
@@ -85,6 +103,7 @@ def upload_video(session_id: str, file: UploadFile):
         raise HTTPException(404, "Session not found")
 
     ext = Path(file.filename or "capture.mp4").suffix.lower()
+    _native_inputs_are_readonly(session)
     if ext not in config.ALLOWED_VIDEO_EXTS:
         raise HTTPException(400, f"Unsupported video type {ext!r}")
 
@@ -143,6 +162,38 @@ def download_photos_zip(session_id: str):
     )
 
 
+@app.get('/api/sessions/{session_id}/recording.zip')
+def download_native_recording(session_id: str):
+    try:
+        session = sessions.get_session(session_id)
+    except sessions.SessionNotFound:
+        raise HTTPException(404, 'Session not found')
+    source = session.root / 'arkit.json'
+    if not source.exists():
+        raise HTTPException(400, 'Session has no native recording')
+    data = json.loads(source.read_text())
+    buffer = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, dir=config.DATA_DIR)
+    try:
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for frame in data['frames']:
+                original = frame['image']
+                frame['image'] = f'images/{original}'
+                archive.write(session.photos_dir / original, frame['image'])
+            archive.writestr('manifest.json', json.dumps(data))
+        buffer.seek(0)
+    except Exception:
+        buffer.close()
+        raise
+    def chunks():
+        try:
+            while chunk := buffer.read(512 * 1024):
+                yield chunk
+        finally:
+            buffer.close()
+    return StreamingResponse(chunks(), media_type='application/zip',
+        headers={'Content-Disposition': f'attachment; filename="{session_id}_recording.zip"'})
+
+
 @app.get("/api/sessions/{session_id}/photos/{filename}")
 def get_photo(session_id: str, filename: str):
     try:
@@ -161,6 +212,7 @@ def delete_photo(session_id: str, filename: str):
         session = sessions.get_session(session_id)
     except sessions.SessionNotFound:
         raise HTTPException(404, "Session not found")
+    _native_inputs_are_readonly(session)
     path = (session.photos_dir / filename).resolve()
     if session.photos_dir.resolve() not in path.parents or not path.exists():
         raise HTTPException(404, "Photo not found")
@@ -184,6 +236,8 @@ def reconstruct(session_id: str, body: ReconstructRequest, background_tasks: Bac
         raise HTTPException(404, "Session not found")
 
     pipeline_fn = _pipeline_for(body.mode)
+    if (session.root / 'arkit.json').exists() and body.mode == 'accurate':
+        pipeline_fn = partial(pipeline_fn, allow_sparse_fallback=body.allow_sparse_fallback)
     background_tasks.add_task(jobs.run_job, session, pipeline_fn)
     return {"status": "queued", "mode": body.mode}
 
@@ -195,6 +249,16 @@ def get_job(session_id: str):
     except sessions.SessionNotFound:
         raise HTTPException(404, "Session not found")
     return jobs.read_job(session)
+
+
+@app.get('/api/sessions/{session_id}/diagnostics')
+def get_diagnostics(session_id: str):
+    try:
+        session = sessions.get_session(session_id)
+    except sessions.SessionNotFound:
+        raise HTTPException(404, 'Session not found')
+    return {name: json.loads((session.output_dir / name).read_text())
+            for name in ['sfm.json', 'reconstruction.json'] if (session.output_dir / name).exists()}
 
 
 @app.get("/api/sessions/{session_id}/result/{filename}")

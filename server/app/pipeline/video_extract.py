@@ -36,7 +36,10 @@ class VideoExtractError(RuntimeError):
 
 
 def _run(cmd: list[str], step: str) -> subprocess.CompletedProcess:
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise VideoExtractError(f'{step} unavailable: ffmpeg is not installed') from exc
     if proc.returncode != 0:
         raise VideoExtractError(f"{step} failed:\n{proc.stderr.strip()[-2000:]}")
     return proc

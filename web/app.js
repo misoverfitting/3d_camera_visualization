@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { progressDisplay } from "./progress.js";
 import {
   CaptureController,
   tipForElapsedSeconds,
@@ -24,10 +25,15 @@ const state = {
   photoCount: 0,
   activeViewer: null,
   jobPollTimer: null,
+  jobPollVersion: 0,
   scalePoints: [],
 };
 
 function showScreen(name, { push = true, title } = {}) {
+  if (name !== 'progress') {
+    clearTimeout(state.jobPollTimer);
+    state.jobPollVersion++;
+  }
   Object.values(screens).forEach((el) => el.classList.remove("active"));
   screens[name].classList.add("active");
   if (push) state.screenStack.push(name);
@@ -44,6 +50,23 @@ btnBack.addEventListener("click", () => {
 });
 
 // ---------- Sessions list ----------
+document.getElementById('form-import-recording').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  const file = document.getElementById('recording-zip').files[0];
+  if (!file) return;
+  const status = document.getElementById('import-status');
+  button.disabled = true;
+  status.textContent = 'Uploading and validating recording…';
+  try {
+    const session = await api.importRecording(file);
+    status.textContent = `Imported ${session.photo_count} frames with native camera poses.`;
+    await refreshSessions();
+    await openSession(session.id);
+  } catch (error) { status.textContent = `Import failed: ${error.message}`; }
+  finally { button.disabled = false; }
+});
 
 async function refreshSessions() {
   const list = document.getElementById("session-list");
@@ -200,7 +223,7 @@ function updatePhotoCountWarning(count) {
 document.querySelectorAll(".mode-card").forEach((card) => {
   card.addEventListener("click", async () => {
     const mode = card.dataset.mode;
-    await api.reconstruct(state.sessionId, mode);
+    await api.reconstruct(state.sessionId, mode, document.getElementById('allow-sparse-preview').checked);
     showScreen("progress");
     pollJob(state.sessionId);
   });
@@ -209,22 +232,49 @@ document.querySelectorAll(".mode-card").forEach((card) => {
 // ---------- Progress ----------
 
 function pollJob(sessionId) {
-  clearInterval(state.jobPollTimer);
+  clearTimeout(state.jobPollTimer);
+  const version = ++state.jobPollVersion;
+  const bar = document.getElementById('job-progress-bar');
+  const fill = document.getElementById('progress-fill');
+  const connection = document.getElementById('progress-connection');
+  const current = () => version === state.jobPollVersion;
+  const render = (job) => {
+    const view = progressDisplay(job);
+    bar.classList.toggle('indeterminate', view.indeterminate);
+    fill.style.width = `${view.percent ?? 0}%`;
+    if (view.percent === null) bar.removeAttribute('aria-valuenow');
+    else bar.setAttribute('aria-valuenow', String(view.percent));
+    bar.setAttribute('aria-valuetext', view.label);
+    document.getElementById('progress-count').textContent = view.label;
+    document.getElementById('progress-detail').textContent = view.detail;
+    document.getElementById('progress-timing').textContent = view.timing;
+    document.getElementById('progress-note').textContent = view.note;
+    document.getElementById('progress-message').textContent = job.message;
+    document.getElementById('progress-stage').textContent = job.stage.replaceAll('_', ' ');
+  };
+  render({ status: 'running', message: 'Checking reconstruction progress…', stage: '' });
   const tick = async () => {
-    const job = await api.getJob(sessionId);
-    document.getElementById("progress-fill").style.width = `${job.percent}%`;
-    document.getElementById("progress-message").textContent = job.message;
-    document.getElementById("progress-stage").textContent = job.stage;
-    if (job.status === "done") {
-      clearInterval(state.jobPollTimer);
-      await showResult(sessionId);
-    } else if (job.status === "error") {
-      clearInterval(state.jobPollTimer);
-      document.getElementById("progress-message").textContent = "Failed: " + job.message;
+    try {
+      const job = await api.getJob(sessionId);
+      if (!current()) return;
+      connection.hidden = true;
+      render(job);
+      if (job.status === 'done') {
+        await showResult(sessionId);
+        return;
+      }
+      if (job.status === 'error') {
+        document.getElementById('progress-message').textContent = 'Failed: ' + job.message;
+        return;
+      }
+    } catch (error) {
+      if (!current()) return;
+      connection.hidden = false;
+      connection.textContent = 'Cannot refresh progress. The reconstruction may still be running; retrying…';
     }
+    if (current()) state.jobPollTimer = setTimeout(tick, 2000);
   };
   tick();
-  state.jobPollTimer = setInterval(tick, 2000);
 }
 
 // ---------- Viewer ----------
@@ -242,6 +292,15 @@ async function showResult(sessionId) {
   showScreen("viewer");
   const job = await api.getJob(sessionId);
   const files = job.result_files || [];
+  const quality = document.getElementById('result-quality');
+  quality.textContent = '';
+  try {
+    const diagnostics = await api.diagnostics(sessionId);
+    const mesh = diagnostics['reconstruction.json'];
+    if (mesh) quality.textContent = mesh.used_dense_mvs
+      ? 'Dense mesh reconstructed. Check dimensions and completeness before use.'
+      : 'Coarse sparse preview only — detailed geometry was not reconstructed.';
+  } catch { quality.textContent = 'Reconstruction quality information unavailable.'; }
   const splatFile = files.find((f) => f.endsWith("splat.ply"));
   const meshFile = files.find((f) => f === "model.ply") || files.find((f) => f === "model.obj");
 
@@ -252,6 +311,10 @@ async function showResult(sessionId) {
   const downloadBtn = document.getElementById("btn-download");
 
   const downloadPhotosBtn = document.getElementById("btn-download-photos");
+  const nativeDownload = document.getElementById('btn-download-native');
+  const session = await api.getSession(sessionId);
+  nativeDownload.hidden = session.source !== 'arkit_rgb';
+  nativeDownload.href = `/api/sessions/${sessionId}/recording.zip`;
   downloadPhotosBtn.href = api.photosZipUrl(sessionId);
   downloadPhotosBtn.setAttribute("download", `${sessionId}_photos.zip`);
   document.getElementById("reprocess-status").textContent = "";

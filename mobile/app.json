@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "Tare Capture",
+    "slug": "tare-capture",
+    "version": "0.1.0",
+    "platforms": ["ios"],
+    "orientation": "portrait",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.tare.capture",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Record object images and ARKit camera poses for 3D reconstruction.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}
