@@ -1,6 +1,8 @@
 # Tare engineering handoff
 
 Prepared 22 October 2026, approximately 6:56 PM America/New_York.
+Operational update: scan completion and safe server restart verified at about
+7:12 PM on 22 October 2026.
 Repository: https://github.com/misoverfitting/3d_camera_visualization
 Working branch: `codex/ios-arkit-capture`, created from `main`.
 Implementation baseline at preparation: `311065e`.
@@ -33,6 +35,18 @@ current code and this handoff to resolve those older statements.
 
 ## 2. Operational snapshot: check again before acting
 
+**Latest verified outcome:** session `248d19d41557` completed successfully using
+dense MVS, with no sparse fallback. Total pipeline time was 5,679.46 seconds
+(about 95 minutes), including 4,943.68 seconds in dense stereo. Both `model.ply`
+and `model.obj` were produced. Their hashes were preserved across the subsequent
+safe server restart, and HTTP GET access to both exports was verified. Visual
+quality and dimensional accuracy still need inspection.
+
+The measured-progress backend and frontend are now active locally. The follow-up
+automation described below completed its work and is **PAUSED**; no further
+scheduled checks for this run are expected. Refresh the web page to load current
+frontend assets. The earlier running-state measurements below are historical.
+
 At preparation, real session **`248d19d41557`** was still running locally:
 
 - 139 native images, with 1920 x 1440 dimensions observed in extraction logs.
@@ -51,13 +65,12 @@ restarting the process terminates them. There is no durable task queue or
 automatic checkpoint/resume workflow.
 
 A local Codex follow-up named **Apply reconstruction progress after scan
-finishes** checks every **10 minutes**. Its ID is
-`apply-reconstruction-progress-after-scan-finishes`. Once all jobs are terminal,
-it is authorized to verify and restart only this local server, preserve results,
-verify the new progress API, report the outcome and disable itself. It must not
-rerun the scan or deploy to Railway. It depends on the owner's computer/app being
-available; it is not part of the repository and does not transfer to a new clone.
-Coordinate with the owner before independently performing the same restart.
+finishes** checked every **10 minutes**. Its ID is
+`apply-reconstruction-progress-after-scan-finishes`. It waited until all jobs
+were terminal, verified and restarted only the local server, preserved outputs
+and prior logs, verified the new API and exports, and paused itself. It did not
+rerun the scan or deploy to Railway. This automation is local to the owner's
+computer/app; it is not part of the repository or transferred by a clone.
 
 Read-only checks from the repo root:
 
@@ -92,7 +105,7 @@ the computer running the browser, not the Windows desktop when opened on a phone
 | Native reconstruction | Fixed ARKit poses/calibration, matched features and triangulated points, then dense MVS | Avoid full incremental camera estimation and preserve the world frame; pose errors are not refined away. |
 | Dense runtime | Verified Windows CUDA COLMAP on RTX 4060 | Actual dense geometry rather than an implicit low-quality sparse fallback. |
 | Meshing | Explicit Poisson depth/trim/thread settings and degenerate-mesh rejection | Default trimming erased a synthetic result; nonempty output still needs inspection. |
-| Progress | Measured depth-map counts, elapsed times, honest indeterminate stages | Code is pushed; backend activation is deferred until the current run ends. |
+| Progress | Measured depth-map counts, elapsed times, honest indeterminate stages | Code is pushed and active locally after the completed scan's safe server restart. |
 | Food vision | Research and implementation plan only | No food model, mask export, target identity or recognition inference is shipped. |
 
 Relevant commits, oldest to newest:
@@ -377,11 +390,14 @@ Timing fields are optional for old jobs. Read-side measurement does not mutate
 the reconstruction's files. Polling retries connection failures and stops when
 leaving the progress screen.
 
-The current old process has not reloaded backend Python. Static frontend edits
-can appear after a browser refresh while the backend still uses the old schema;
-in that mixed state, progress is deliberately indeterminate. Activation requires
-a backend restart **after all jobs finish**, then refreshing the page. No iPhone
-build is involved.
+The backend was safely restarted after the real scan completed, and the new
+schema/frontend were verified. For future updates, static frontend edits can
+appear after refresh while Python still uses its previously loaded code; in that
+mixed state, progress is deliberately indeterminate. Activating backend changes
+requires a restart **after all jobs finish**, then refreshing the page. No iPhone
+build is involved. This older completed job has null new timing fields because
+it started before timing metadata was added; its runtime remains available in
+`output/reconstruction.json`.
 
 Background logs are `.tools/server.stdout.log` and `.tools/server.stderr.log`;
 the saved launcher PID is `.tools/server.pid`. Validate the executable, parent/
@@ -455,10 +471,13 @@ Confirmed in this work:
 - The synthetic test used 32 images at 480 x 360. It is not a runtime/quality
   prediction for 139 full-resolution real phone frames. The current real run
   has already demonstrated substantially longer runtime.
+- The 139-frame real scan completed in about 95 minutes with dense output and
+  successful PLY/OBJ downloads. This establishes execution, not visual accuracy.
 
 Not yet established: real-food dimensional accuracy/completeness, robust pose
 alignment under difficult captures, a reliable fast preset, food segmentation/
-classification, a validated splat runtime, or the final result of the active scan.
+classification, a validated splat runtime, or the visual/dimensional quality of
+the completed real scan.
 No controlled real-capture comparison has established that the new route is
 faster or better than the old route at matched quality.
 
@@ -591,10 +610,10 @@ Useful supporting docs:
 
 1. Confirm branch/worktree and preserve local edits; establish Expo/Apple access
    and reproduce the mobile project association in the engineer's checkout.
-2. Let the active scan finish. Retain its original ZIP, output and diagnostics;
-   verify whether it actually produced a dense, usable model before changing it.
-3. Confirm the deferred progress update is active after the safe restart and
-   refresh the web page. Stop duplicate monitoring if ownership changes.
+2. Review the completed real scan. Retain its original ZIP, output and diagnostics;
+   assess whether the dense model is usable before changing reconstruction settings.
+3. Refresh the web page to load the active progress update. The original follow-up
+   is paused; check for any new active jobs before future restarts or ownership changes.
 4. Reproduce setup/tests and the synthetic GPU smoke test on an idle machine.
 5. Create a separate real-capture benchmark session, establish geometry/runtime
    baselines, and inspect pose/image alignment and foreground removal.
