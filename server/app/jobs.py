@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Callable
 
 from .sessions import Session
+from .job_progress import enrich_job
 
 _locks: dict[str, threading.Lock] = {}
 
@@ -27,8 +29,14 @@ class ProgressReporter:
 
     def __init__(self, job_path: Path):
         self._job_path = job_path
+        self.started_at = time.time()
+        self.stage_started_at = self.started_at
+        self._stage = None
 
     def update(self, stage: str, message: str, percent: int) -> None:
+        if stage != self._stage:
+            self.stage_started_at = time.time()
+            self._stage = stage
         _write(self._job_path, {
             "status": "running",
             "stage": stage,
@@ -36,6 +44,8 @@ class ProgressReporter:
             "percent": percent,
             "result_files": [],
             "error": None,
+            "started_at": self.started_at,
+            "stage_started_at": self.stage_started_at,
         })
 
 
@@ -60,7 +70,7 @@ def read_job(session: Session) -> dict:
     if not session.job_path.exists():
         return {"status": "new", "stage": "", "message": "Not started", "percent": 0,
                 "result_files": [], "error": None}
-    return json.loads(session.job_path.read_text())
+    return enrich_job(session, json.loads(session.job_path.read_text()))
 
 
 def run_job(session: Session, pipeline_fn: Callable[[Session, ProgressReporter], list[str]]) -> None:
@@ -79,16 +89,21 @@ def run_job(session: Session, pipeline_fn: Callable[[Session, ProgressReporter],
             _write(session.job_path, {
                 "status": "running", "stage": "starting", "message": "Reconstruction started",
                 "percent": 0, "result_files": [], "error": None,
+                "started_at": reporter.started_at, "stage_started_at": reporter.stage_started_at,
             })
             result_files = pipeline_fn(session, reporter)
             _write(session.job_path, {
                 "status": "done", "stage": "complete", "message": "Reconstruction complete",
                 "percent": 100, "result_files": result_files, "error": None,
+                "started_at": reporter.started_at, "stage_started_at": reporter.stage_started_at,
+                "finished_at": time.time(),
             })
         except Exception as exc:  # noqa: BLE001 - surface any pipeline failure to the client
             _write(session.job_path, {
                 "status": "error", "stage": "failed", "message": str(exc),
                 "percent": 0, "result_files": [], "error": traceback.format_exc(),
+                "started_at": reporter.started_at, "stage_started_at": reporter.stage_started_at,
+                "finished_at": time.time(),
             })
         finally:
             lock.release()

@@ -95,9 +95,14 @@
   <!-- PROGRESS -->
   <section id="screen-progress" class="screen">
     <h2>Reconstructing your model&hellip;</h2>
-    <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+    <div id="job-progress-bar" class="progress-bar" role="progressbar" aria-label="Current reconstruction stage" aria-valuemin="0" aria-valuemax="100"><div id="progress-fill" class="progress-fill"></div></div>
+    <p id="progress-count"></p>
+    <p id="progress-detail" class="muted"></p>
+    <p id="progress-timing" class="muted"></p>
     <p id="progress-message" class="muted"></p>
     <p id="progress-stage" class="progress-stage"></p>
+    <p id="progress-note" class="muted"></p>
+    <p id="progress-connection" class="muted" role="status" hidden></p>
   </section>
 
   <!-- VIEWER -->

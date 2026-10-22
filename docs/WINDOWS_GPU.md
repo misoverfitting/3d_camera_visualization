@@ -30,6 +30,31 @@ The startup script explicitly sets COLMAP_BIN, QT_PLUGIN_PATH, DATA_DIR and the
 COLMAP thread count for that process. Starting uvicorn without this configuration
 does not automatically discover the workspace's portable COLMAP installation.
 
+## Reconstruction progress
+
+The web progress bar measures the current stage's completed work, not elapsed
+time or an estimated fraction of the entire reconstruction. During dense stereo
+it counts complete photometric and geometric depth-map files against the
+reference images in `stereo/patch-match.cfg`. The pipeline explicitly enables
+geometric consistency, so both passes are included: completing the first pass
+alone is 50% of the expected depth-map outputs. Partial/truncated files and
+outputs outside the current plan are not counted. Normal-map files are not
+counted separately. A completed depth-map count does not guarantee model quality
+or that COLMAP's final cleanup has finished.
+
+The page shows both pass counts, total/stage elapsed time for new jobs, and time
+since the last completed depth map. Stages without measurable work counts use an
+activity indicator rather than the old fixed 65%/88% milestones. Fusion, cleanup,
+meshing and export can continue after depth maps reach 100%. There is no claimed
+whole-job ETA. Polling retries connection errors and stops when leaving the
+progress screen. The API's legacy `percent` field remains for compatibility;
+the new UI uses `stage_percent` instead.
+
+Do not restart the backend during reconstruction: jobs run inside its process.
+Apply server-code changes after all active jobs finish, then refresh the web
+page. A frontend refresh alone cannot reload backend Python code. Older jobs
+without start timestamps have no invented elapsed duration.
+
 ## Reproduce setup or GPU verification
 
 ```powershell

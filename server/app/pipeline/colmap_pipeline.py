@@ -74,6 +74,7 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
             cc.run([
                 colmap_bin, "patch_match_stereo",
                 "--workspace_path", str(dense_dir),
+                '--PatchMatchStereo.geom_consistency', 'true',
             ], "Dense stereo")
             timings['dense_stereo'] = time.perf_counter() - stage_started
 

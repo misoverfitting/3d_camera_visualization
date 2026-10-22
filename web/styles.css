@@ -209,6 +209,11 @@ input[type="text"], input[type="number"] {
   margin-top: 1rem;
 }
 .progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.4s ease; }
+.progress-bar.indeterminate .progress-fill { width: 30% !important; animation: stage-activity 1.8s ease-in-out infinite alternate; }
+@keyframes stage-activity { from { transform: translateX(0); } to { transform: translateX(233%); } }
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar.indeterminate .progress-fill { animation: none; opacity: 0.6; }
+}
 .progress-stage { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 
 .viewer-container {

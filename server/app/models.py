@@ -37,6 +37,16 @@ class JobProgress(BaseModel):
     stage: str
     message: str
     percent: int = 0
+    # `percent` is retained for older clients; it is a pipeline milestone, not
+    # measured whole-job completion. New clients use stage_percent or activity.
+    stage_percent: Optional[float] = None
+    completed_units: Optional[int] = None
+    total_units: Optional[int] = None
+    unit: Optional[str] = None
+    work_detail: Optional[str] = None
+    elapsed_seconds: Optional[float] = None
+    stage_elapsed_seconds: Optional[float] = None
+    last_output_seconds_ago: Optional[float] = None
     result_files: list[str] = Field(default_factory=list)
     error: Optional[str] = None
 

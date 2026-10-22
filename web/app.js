@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { progressDisplay } from "./progress.js";
 import {
   CaptureController,
   tipForElapsedSeconds,
@@ -24,10 +25,15 @@ const state = {
   photoCount: 0,
   activeViewer: null,
   jobPollTimer: null,
+  jobPollVersion: 0,
   scalePoints: [],
 };
 
 function showScreen(name, { push = true, title } = {}) {
+  if (name !== 'progress') {
+    clearTimeout(state.jobPollTimer);
+    state.jobPollVersion++;
+  }
   Object.values(screens).forEach((el) => el.classList.remove("active"));
   screens[name].classList.add("active");
   if (push) state.screenStack.push(name);
@@ -226,22 +232,49 @@ document.querySelectorAll(".mode-card").forEach((card) => {
 // ---------- Progress ----------
 
 function pollJob(sessionId) {
-  clearInterval(state.jobPollTimer);
+  clearTimeout(state.jobPollTimer);
+  const version = ++state.jobPollVersion;
+  const bar = document.getElementById('job-progress-bar');
+  const fill = document.getElementById('progress-fill');
+  const connection = document.getElementById('progress-connection');
+  const current = () => version === state.jobPollVersion;
+  const render = (job) => {
+    const view = progressDisplay(job);
+    bar.classList.toggle('indeterminate', view.indeterminate);
+    fill.style.width = `${view.percent ?? 0}%`;
+    if (view.percent === null) bar.removeAttribute('aria-valuenow');
+    else bar.setAttribute('aria-valuenow', String(view.percent));
+    bar.setAttribute('aria-valuetext', view.label);
+    document.getElementById('progress-count').textContent = view.label;
+    document.getElementById('progress-detail').textContent = view.detail;
+    document.getElementById('progress-timing').textContent = view.timing;
+    document.getElementById('progress-note').textContent = view.note;
+    document.getElementById('progress-message').textContent = job.message;
+    document.getElementById('progress-stage').textContent = job.stage.replaceAll('_', ' ');
+  };
+  render({ status: 'running', message: 'Checking reconstruction progress…', stage: '' });
   const tick = async () => {
-    const job = await api.getJob(sessionId);
-    document.getElementById("progress-fill").style.width = `${job.percent}%`;
-    document.getElementById("progress-message").textContent = job.message;
-    document.getElementById("progress-stage").textContent = job.stage;
-    if (job.status === "done") {
-      clearInterval(state.jobPollTimer);
-      await showResult(sessionId);
-    } else if (job.status === "error") {
-      clearInterval(state.jobPollTimer);
-      document.getElementById("progress-message").textContent = "Failed: " + job.message;
+    try {
+      const job = await api.getJob(sessionId);
+      if (!current()) return;
+      connection.hidden = true;
+      render(job);
+      if (job.status === 'done') {
+        await showResult(sessionId);
+        return;
+      }
+      if (job.status === 'error') {
+        document.getElementById('progress-message').textContent = 'Failed: ' + job.message;
+        return;
+      }
+    } catch (error) {
+      if (!current()) return;
+      connection.hidden = false;
+      connection.textContent = 'Cannot refresh progress. The reconstruction may still be running; retrying…';
     }
+    if (current()) state.jobPollTimer = setTimeout(tick, 2000);
   };
   tick();
-  state.jobPollTimer = setInterval(tick, 2000);
 }
 
 // ---------- Viewer ----------
