@@ -1,5 +1,9 @@
 # Phone 3D Capture
 
+For the current native iPhone/desktop GPU branch, start with the
+[engineering handoff](HANDOFF.md): startup, TestFlight, implementation status,
+verification limits, active-work precautions, and the food-vision roadmap.
+
 Scan a real object into a 3D model using nothing but your phone's browser
 camera. Built on the open-source photogrammetry/Gaussian-splatting stack
 surveyed in *Phone-Based 3D Capture: The 2026 Landscape* (Aug 2026), which
