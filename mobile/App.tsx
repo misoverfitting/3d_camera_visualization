@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 
-type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string };
-type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; onStatus: (event: { nativeEvent: Status }) => void };
+type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
+type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
 const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null> }>('TareCapture');
 
@@ -16,6 +16,7 @@ export default function App() {
   const [sharing, setSharing] = useState(false);
   const [captureWithoutBox, setCaptureWithoutBox] = useState(false);
   const [resetToken, setResetToken] = useState(0);
+  const [forceMultiView, setForceMultiView] = useState(false);
   useEffect(() => {
     capture.latestRecording().then(saved => { if (saved) setPath(saved); })
       .catch(error => setStatus({ message: `Could not load saved recordings: ${error}` }));
@@ -23,7 +24,7 @@ export default function App() {
   return <SafeAreaView style={styles.page}>
     <Text style={styles.title}>Tare Capture{status.build ? ` · Build ${status.build}` : ''}</Text>
     <Text style={styles.copy}>Look downward and move slowly sideways over a textured table. Tap a cyan surface near the object, or skip the box.</Text>
-    <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} onStatus={({ nativeEvent: e }) => {
+    <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} forceMultiView={forceMultiView} onStatus={({ nativeEvent: e }) => {
       setStatus(e);
       if (e.region !== undefined) setRegion(e.region);
       if (e.recording !== undefined) setRecording(e.recording);
@@ -33,6 +34,8 @@ export default function App() {
     <Text style={styles.copy}>Tracking: {status.tracking || 'initializing'} · Surfaces: {status.surfaces || 0} · Frames: {status.frames || 0}</Text>
     <Text style={styles.copy}>Walls: {status.walls || 0} · Feature points: {status.points || 0}</Text>
     <Text style={styles.copy}>Surface overlays: {status.overlays || 0} · In view: {status.overlaysInView || 0}</Text>
+    <Text style={styles.copy}>Depth: {status.depthMode === 'lidar' ? 'LiDAR' : 'multi-view (OpenCV)'} · Cloud points: {status.cloudPoints || 0}{status.depthMode === 'multiview' ? ` · Tracks: ${status.tracks || 0}` : ''}</Text>
+    {status.lidarSupported ? <Button title={forceMultiView ? 'Use LiDAR depth' : 'Force multi-view depth (benchmark)'} disabled={recording || status.saving} onPress={() => setForceMultiView(!forceMultiView)} /> : null}
     <Button title="Restart surface detection" disabled={recording || status.saving} onPress={() => setResetToken(value => value + 1)} />
     <View style={styles.row}>
       <Button title="Smaller box" disabled={recording} onPress={() => setSize(Math.max(0.25, size - 0.25))} />
@@ -48,7 +51,7 @@ export default function App() {
       catch (error) { setStatus({ message: String(error) }); }
       finally { setSharing(false); }
     }} />
-    <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB and poses only; no measured depth. Exports stay on this phone until you share them.</Text>
+    <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB, poses and a fused point cloud (points.ply). Exports stay on this phone until you share them.</Text>
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({

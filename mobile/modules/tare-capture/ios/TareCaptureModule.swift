@@ -45,6 +45,7 @@ public class TareCaptureModule: Module {
       Prop("regionSize") { (view: TareCaptureView, value: Double) in view.setSize(value) }
       Prop("captureWithoutBox") { (view: TareCaptureView, value: Bool) in view.captureWithoutBox = value }
       Prop("resetToken") { (view: TareCaptureView, value: Int) in view.resetTracking(value) }
+      Prop("forceMultiView") { (view: TareCaptureView, value: Bool) in view.setForceMultiView(value) }
     }
   }
 }
@@ -84,10 +85,26 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   // Accessed only on writer queue, and reset only after that queue drains.
   private var frames: [[String: Any]] = []
   private var manifest: [String: Any] = [:]
+  // Depth: `cloud` and `tracker` are accessed only on depthQueue; the rest on main.
+  private let depthQueue = DispatchQueue(label: "tare.depth", qos: .userInitiated)
+  private let cloud = PointCloud()
+  private let tracker = TareFeatureTracker(downscale: 2)
+  private let cloudNode = SCNNode()
+  private var depthMode: DepthMode = DepthMode.lidarSupported ? .lidar : .multiView
+  private var depthBusy = false
+  private var depthGeneration = 0 // Bumped on every clear so in-flight results cannot repaint old points.
+  private var trackerStale = false
+  private var lastDepthSample: TimeInterval = 0
+  private var lastCloudRender: TimeInterval = 0
+  private var cloudPoints = 0
+  private var activeTracks = 0
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     preview.scene = SCNScene()
+    cloudNode.name = "tare.point-cloud"
+    cloudNode.renderingOrder = 12
+    preview.scene.rootNode.addChildNode(cloudNode)
     addSubview(preview)
     preview.session.delegate = self
     preview.session.delegateQueue = .main
@@ -139,6 +156,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private func runSession(reset: Bool = false) {
     let config = ARWorldTrackingConfiguration()
     config.planeDetection = [.horizontal, .vertical]
+    if depthMode == .lidar { config.frameSemantics.insert(.smoothedSceneDepth) }
     preview.session.run(config, options: reset ? [.resetTracking, .removeExistingAnchors] : [])
   }
   func resetTracking(_ token: Int) {
@@ -150,8 +168,82 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     surfaces.values.forEach { $0.removeFromParentNode() }; surfaces.removeAll()
     horizontalPlanes = 0; verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
     placementHint = nil; hintUntil = 0; lastStatus = 0
+    clearDepth()
     runSession(reset: true)
     emit("Tracking restarted. Point down at a textured table and move slowly sideways.")
+  }
+  func setForceMultiView(_ value: Bool) {
+    let mode: DepthMode = value || !DepthMode.lidarSupported ? .multiView : .lidar
+    guard mode != depthMode, !recording, !finishing else { return }
+    depthMode = mode; clearDepth()
+    if window != nil, AVCaptureDevice.authorizationStatus(for: .video) == .authorized { runSession() }
+    emit(mode == .lidar ? "Using LiDAR depth." : "Using multi-view depth from tracked image features.")
+  }
+  private func clearDepth() {
+    depthGeneration += 1; cloudPoints = 0; activeTracks = 0; trackerStale = false
+    cloudNode.geometry = nil
+    depthQueue.async { [cloud, tracker] in cloud.clear(); tracker.reset() }
+  }
+  /// One depth job in flight on a latest-frame policy: frames arriving while busy are skipped.
+  private func processDepth(_ frame: ARFrame) {
+    guard case .normal = frame.camera.trackingState else {
+      // Observations from before a tracking loss may not share the current world frame.
+      trackerStale = true; return
+    }
+    let interval = depthMode == .lidar ? 0.2 : 1.0 / 15
+    guard !depthBusy, frame.timestamp - lastDepthSample >= interval else { return }
+    let mode = depthMode, generation = depthGeneration
+    let depth = mode == .lidar ? (frame.smoothedSceneDepth ?? frame.sceneDepth) : nil
+    if mode == .lidar && depth == nil { return }
+    depthBusy = true; lastDepthSample = frame.timestamp
+    let bounds = region.map { ScanBounds(origin: SIMD3($0.columns.3.x, $0.columns.3.y, $0.columns.3.z), size: size) }
+    let resetTracker = trackerStale; trackerStale = false
+    let render = frame.timestamp - lastCloudRender >= 0.5
+    if render { lastCloudRender = frame.timestamp }
+    let intrinsics = frame.camera.intrinsics, pose = frame.camera.transform
+    let imageSize = frame.camera.imageResolution
+    // Retain only the buffers needed, never the ARFrame itself.
+    let image = mode == .multiView ? frame.capturedImage : nil
+    depthQueue.async { [weak self, cloud, tracker] in
+      var points: [SIMD3<Float>] = []
+      if let depth {
+        points = LidarSampler.worldPoints(depth, intrinsics: intrinsics, imageSize: imageSize, cameraToWorld: pose)
+      } else if let image {
+        if resetTracker { tracker.reset() }
+        let packed = tracker.processFrame(image, intrinsics: intrinsics, cameraToWorld: pose)
+        points = packed.withUnsafeBytes { raw in
+          let floats = raw.bindMemory(to: Float.self)
+          return Swift.stride(from: 0, to: floats.count - 2, by: 3).map { SIMD3(floats[$0], floats[$0 + 1], floats[$0 + 2]) }
+        }
+      }
+      if let bounds { points = points.filter(bounds.contains) }
+      cloud.add(points)
+      // LiDAR voxels seen once are mostly edge noise; triangulated points already passed geometric gates.
+      let display = render ? cloud.points(minCount: mode == .lidar ? 2 : 1, limit: 40_000) : nil
+      let total = cloud.count, tracks = tracker.activeTracks
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.depthBusy = false
+        guard generation == self.depthGeneration else { return }
+        self.cloudPoints = total; self.activeTracks = mode == .multiView ? tracks : 0
+        if let display { self.drawCloud(display, color: mode == .lidar ? .magenta : .green) }
+      }
+    }
+  }
+  private func drawCloud(_ points: [SIMD3<Float>], color: UIColor) {
+    guard !points.isEmpty else { cloudNode.geometry = nil; return }
+    let source = SCNGeometrySource(vertices: points.map { SCNVector3($0.x, $0.y, $0.z) })
+    let indices = Array(0..<Int32(points.count)).withUnsafeBufferPointer { Data(buffer: $0) }
+    let element = SCNGeometryElement(data: indices, primitiveType: .point, primitiveCount: points.count, bytesPerIndex: 4)
+    element.pointSize = 4
+    element.minimumPointScreenSpaceRadius = 1.5
+    element.maximumPointScreenSpaceRadius = 4
+    let geometry = SCNGeometry(sources: [source], elements: [element])
+    let material = SCNMaterial()
+    material.diffuse.contents = color
+    material.lightingModel = .constant
+    geometry.materials = [material]
+    cloudNode.geometry = geometry
   }
   func setSize(_ value: Double) {
     guard !recording, !finishing, value.isFinite else { return }
@@ -268,12 +360,14 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       let target = documents.appendingPathComponent("TareScans/" + UUID().uuidString, isDirectory: true)
       try FileManager.default.createDirectory(at: target.appendingPathComponent("images"), withIntermediateDirectories: true)
       folder = target; count = 0; dropped = 0; trackingSkipped = 0; frames = []
+      // The exported cloud covers exactly this recording.
+      clearDepth()
       startTime = frame.timestamp; lastSample = -.infinity
       manifest = ["schema_version": 1, "source": "arkit_rgb", "created_at": ISO8601DateFormatter().string(from: Date()),
         "device": UIDevice.current.model, "system_version": UIDevice.current.systemVersion,
         "world_units": "meters", "matrix_layout": "column_major", "pose": "camera_to_world",
         "camera_axes": "+X right, +Y up, -Z forward", "image_orientation": "native_sensor_unrotated",
-        "depth_available": false,
+        "depth_available": false, "depth_mode": depthMode.rawValue,
         "max_frames": 240, "sample_interval_seconds": 0.5]
       if let region {
         manifest["region"] = ["origin": [region.columns.3.x, region.columns.3.y, region.columns.3.z],
@@ -291,6 +385,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     case .limited(let reason): tracking = "limited: \(reason)"
     }
     trackingDescription = tracking
+    processDepth(frame)
     if frame.timestamp - lastStatus > 1 {
       lastStatus = frame.timestamp
       // Reconcile the complete live anchor list, including anchors whose initial
@@ -354,24 +449,31 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     UIApplication.shared.isIdleTimerDisabled = false
     let droppedCount = dropped; let skippedCount = trackingSkipped
     emit("Saving recording…")
-    writer.async { [self] in
-      var saved = manifest
-      saved["frames"] = frames
-      saved["diagnostics"] = ["saved_frames": frames.count, "writer_busy_skips": droppedCount,
-        "tracking_skips": skippedCount, "stop_reason": reason]
-      do {
-        let data = try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
-        DispatchQueue.main.async { [self] in
-          finishing = false; emit(reason, extra: ["recording": false, "path": folder.path])
+    // Snapshot the cloud on its own queue, then write after any queued images.
+    depthQueue.async { [self] in
+      let cloudCount = cloud.count, ply = cloud.plyData()
+      writer.async { [self] in
+        var saved = manifest
+        saved["frames"] = frames
+        saved["diagnostics"] = ["saved_frames": frames.count, "writer_busy_skips": droppedCount,
+          "tracking_skips": skippedCount, "stop_reason": reason]
+        do {
+          try ply.write(to: folder.appendingPathComponent("points.ply"), options: .atomic)
+          saved["point_cloud"] = ["file": "points.ply", "source": saved["depth_mode"] ?? NSNull(),
+            "points": cloudCount, "voxel_m": cloud.voxel, "frame": "world"]
+          let data = try JSONSerialization.data(withJSONObject: saved, options: [.prettyPrinted, .sortedKeys])
+          try data.write(to: folder.appendingPathComponent("manifest.json"), options: .atomic)
+          DispatchQueue.main.async { [self] in
+            finishing = false; emit(reason, extra: ["recording": false, "path": folder.path])
+          }
+        } catch {
+          DispatchQueue.main.async { [self] in finishing = false; emit("Save failed: \(error)", extra: ["recording": false]) }
         }
-      } catch {
-        DispatchQueue.main.async { [self] in finishing = false; emit("Save failed: \(error)", extra: ["recording": false]) }
       }
     }
   }
   func sessionWasInterrupted(_ session: ARSession) { finish(reason: "AR session interrupted; recording saved") }
-  func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
+  func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); clearDepth(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
   func session(_ session: ARSession, didFailWithError error: Error) { finish(reason: "AR session failed: \(error)"); emit("AR session error: \(error)") }
   private func emit(_ message: String, extra: [String: Any] = [:]) {
     let inView: Int
@@ -382,7 +484,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       "tracking": trackingDescription, "surfaces": horizontalPlanes,
       "overlays": surfaces.count, "overlaysInView": inView,
       "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-      "walls": verticalPlanes, "points": featurePoints, "saving": finishing]
+      "walls": verticalPlanes, "points": featurePoints, "saving": finishing,
+      "depthMode": depthMode.rawValue, "lidarSupported": DepthMode.lidarSupported,
+      "cloudPoints": cloudPoints, "tracks": activeTracks]
     event.merge(extra) { _, new in new }; onStatus(event)
   }
   private func floats(_ m: simd_float4x4) -> [Float] {
