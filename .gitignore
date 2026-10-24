@@ -14,3 +14,4 @@ mobile/.build-temp/
 .tools/
 .claude
 mobile/modules/tare-capture/ios/vendor/
+**/.build/
