@@ -97,16 +97,30 @@ def test_empty_dense_mesh_is_not_reported_as_success(client, monkeypatch):
     dense = session.work_dir / 'dense'
     (dense / 'sparse').mkdir(parents=True)
     monkeypatch.setattr(cc, 'dense_stereo_available', lambda: True)
-    monkeypatch.setattr(cc, 'run_sfm_and_undistort', lambda *a: SimpleNamespace(dense_workspace_dir=dense, undistorted_model_dir=dense / 'sparse'))
+    from app.pipeline import reconstruction_options
+    monkeypatch.setattr(reconstruction_options, 'software_identity', lambda *a: {'version': 'test'})
+    (dense / 'images').mkdir()
+    (dense / 'images/a.jpg').write_bytes(b'image')
+    for name in ('cameras.txt', 'images.txt', 'points3D.txt'):
+        (dense / 'sparse' / name).write_text('model')
+    (dense / 'stereo/depth_maps').mkdir(parents=True)
+    (dense / 'stereo/normal_maps').mkdir()
+    (dense / 'stereo/patch-match.cfg').write_text('a.jpg\n__auto__, 20\n')
+    monkeypatch.setattr(cc, 'run_sfm_and_undistort', lambda *a: SimpleNamespace(dense_workspace_dir=dense, undistorted_model_dir=dense / 'sparse', undistorted_images_dir=dense / 'images'))
     monkeypatch.setattr(pipeline.background_removal, 'isolate_foreground', lambda cloud: (cloud, {}))
     def command(args, step):
+        if args[1] == 'patch_match_stereo':
+            workspace = Path(args[args.index('--workspace_path') + 1])
+            for folder in ('depth_maps', 'normal_maps'):
+                for kind in ('photometric', 'geometric'):
+                    (workspace / 'stereo' / folder / f'a.jpg.{kind}.bin').write_bytes(b'1&1&1&' + b'\0' * 4)
         if args[1] == 'stereo_fusion':
             cloud = o3d.geometry.PointCloud()
             cloud.points = o3d.utility.Vector3dVector(np.random.default_rng(9).normal(size=(100,3)))
-            o3d.io.write_point_cloud(str(dense / 'fused.ply'), cloud)
+            o3d.io.write_point_cloud(args[args.index('--output_path') + 1], cloud)
         if args[1] == 'poisson_mesher':
             assert '--PoissonMeshing.trim' in args
-            (session.work_dir / 'mesh.ply').write_text('ply\nformat ascii 1.0\nelement vertex 0\nelement face 0\nend_header\n')
+            Path(args[args.index('--output_path') + 1]).write_text('ply\nformat ascii 1.0\nelement vertex 0\nelement face 0\nend_header\n')
     monkeypatch.setattr(cc, 'run', command)
     with pytest.raises(cc.PipelineError, match='degenerate'):
         pipeline.run_accurate_pipeline(session, SimpleNamespace(update=lambda *a: None), allow_sparse_fallback=False)

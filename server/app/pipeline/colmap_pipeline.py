@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
+import uuid
 
 import open3d as o3d
 
@@ -26,7 +27,10 @@ from . import colmap_common as cc
 from . import mesh_fallback
 
 
-def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sparse_fallback=True) -> list[str]:
+def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sparse_fallback=True, options=None) -> list[str]:
+    from .reconstruction_options import ReconstructionOptions, input_fingerprint, software_identity, cached_stage, atomic_json, file_digest
+    from .reconstruction_cache import cached_sfm, dense_workspace
+    options = options or ReconstructionOptions.from_env()
     started = time.perf_counter()
     native_path = session.root / 'arkit.json'
     native = json.loads(native_path.read_text()) if native_path.exists() else None
@@ -42,6 +46,8 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
     colmap_bin = cc.config.COLMAP_BIN
     dense_error = 'CUDA-enabled COLMAP is unavailable'
     timings = {}
+    cache_stats = {}
+    identity = None
     def write_metadata():
         (output / 'reconstruction.json').write_text(json.dumps({
             'mode': 'accurate', 'source': 'arkit_rgb' if native else 'rgb',
@@ -50,7 +56,9 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
             'dense_failure': None if used_dense else dense_error,
             'photo_count': session.photo_count(), 'background_removal': bg_stats,
             'region_applied': crop_applied, 'elapsed_seconds': time.perf_counter() - started,
-            'stage_seconds': timings,
+            'stage_seconds': timings, 'settings': options.to_dict(),
+            'cache': cache_stats, 'provenance': identity,
+            'sfm': json.loads((output / 'sfm.json').read_text()) if (output / 'sfm.json').exists() else None,
             'poisson_depth': cc.config.POISSON_DEPTH, 'poisson_trim': cc.config.POISSON_TRIM,
         }, indent=2))
 
@@ -58,8 +66,21 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
     if native and not allow_sparse_fallback and not dense_available:
         write_metadata()
         raise cc.PipelineError('Native scans require dense geometry by default. CUDA-enabled COLMAP is unavailable; enable sparse preview explicitly for a coarse CPU result.')
-    sfm = cc.run_sfm_and_undistort(session, reporter)
-    dense_dir = sfm.dense_workspace_dir
+    identity = {'inputs': input_fingerprint(session), 'software': software_identity(colmap_bin),
+                'threads': cc.config.COLMAP_NUM_THREADS, 'max_frames': options.max_frames,
+                'feature_device': options.feature_device}
+    sfm_started = time.perf_counter()
+    sfm, cache_stats['sfm_reused'] = cached_sfm(session, reporter, options, identity, cc.run_sfm_and_undistort)
+    timings['sfm'] = time.perf_counter() - sfm_started
+    dense_identity = {'sfm': identity, 'max_image_size': options.max_image_size,
+                      'source_views': options.source_views, 'iterations': options.iterations,
+                      'sparse_model': {p.name: file_digest(p) for p in sfm.undistorted_model_dir.glob('*.txt')}}
+    if dense_available:
+        dense_work, dense_pointer = dense_workspace(session, sfm, dense_identity, options)
+    else:
+        dense_work = session.work_dir
+    dense_dir = dense_work / 'dense'
+    mesh_ply = dense_work / ('mesh-' + uuid.uuid4().hex + '.ply')
     if dense_available:
         try:
             if native:
@@ -71,26 +92,42 @@ def run_accurate_pipeline(session: Session, reporter: ProgressReporter, allow_sp
                         '--output_path', str(dense_dir / 'sparse'), '--output_type', 'BIN'], 'Dense model compatibility conversion')
             stage_started = time.perf_counter()
             reporter.update("dense_stereo", "Running dense multi-view stereo (GPU)", 65)
-            cc.run([
-                colmap_bin, "patch_match_stereo",
-                "--workspace_path", str(dense_dir),
-                '--PatchMatchStereo.geom_consistency', 'true',
-            ], "Dense stereo")
+            def stereo():
+                cc.run([
+                    colmap_bin, "patch_match_stereo",
+                    "--workspace_path", str(dense_dir),
+                    *options.stereo_args(),
+                ], "Dense stereo")
+            plan = [line.strip() for line in (dense_dir / 'stereo/patch-match.cfg').read_text().splitlines()
+                    if line.strip() and not line.lstrip().startswith('#')]
+            artifacts = [dense_dir / 'stereo' / folder / f'{name}.{kind}.bin'
+                         for name in plan[::2] for kind in ('photometric', 'geometric')
+                         for folder in ('depth_maps', 'normal_maps')]
+            artifacts += [dense_dir / 'stereo/patch-match.cfg']
+            artifacts += [p for p in (dense_dir / 'images').iterdir() if p.is_file()]
+            cache_stats['dense_stereo'] = cached_stage(dense_dir / 'stereo-complete.json', artifacts, stereo, options.reuse)
+            atomic_json(dense_pointer, {'attempt': dense_work.name})
             timings['dense_stereo'] = time.perf_counter() - stage_started
 
-            fused_ply = dense_dir / "fused.ply"
+            raw_fused_ply = dense_dir / "fused-raw.ply"
+            fused_ply = dense_dir / "fused-foreground.ply"
             stage_started = time.perf_counter()
             reporter.update("fusion", "Fusing depth maps into a dense point cloud", 78)
-            cc.run([
-                colmap_bin, "stereo_fusion",
-                "--workspace_path", str(dense_dir),
-                "--output_path", str(fused_ply),
-            ], "Stereo fusion")
+            def fusion():
+                cc.run([
+                    colmap_bin, "stereo_fusion",
+                    "--workspace_path", str(dense_dir),
+                    "--output_path", str(raw_fused_ply),
+                    "--input_type", "geometric",
+                    "--StereoFusion.max_image_size", str(options.max_image_size),
+                    "--StereoFusion.num_threads", str(cc.config.COLMAP_NUM_THREADS),
+                ], "Stereo fusion")
+            cache_stats['fusion'] = cached_stage(dense_dir / "fusion-complete.json", [raw_fused_ply], fusion, options.reuse)
             timings['fusion'] = time.perf_counter() - stage_started
 
             reporter.update("background_removal", "Removing background (floor/tabletop)", 84)
             stage_started = time.perf_counter()
-            fused_pcd = o3d.io.read_point_cloud(str(fused_ply))
+            fused_pcd = o3d.io.read_point_cloud(str(raw_fused_ply))
             if region:
                 from .arkit_pipeline import crop_cloud
                 fused_pcd = crop_cloud(fused_pcd, region)
