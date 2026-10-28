@@ -164,7 +164,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       object: nil, queue: .main) { [weak self] _ in
         guard let self, self.window != nil, AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return }
         self.region = nil; self.box?.removeFromParentNode()
-        self.runSession(); self.emit("Place a new scan box after resuming.")
+        // Poses from before the pause may not line up with the resumed session.
+        self.rimReset(); self.demo.reset()
+        self.runSession(); self.emit(self.demo.enabled ? "Tap the middle of the plate to start." : "Place a new scan box after resuming.")
       }
   }
   deinit {
