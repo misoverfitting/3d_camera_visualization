@@ -47,6 +47,9 @@ public class TareCaptureModule: Module {
       try Self.cameraView().rimMeasure(taps: taps, rulerDiameterMm: rulerDiameterMm)
     }.runOnQueue(.main)
     AsyncFunction("rimReset") { TareCaptureView.current?.rimReset() }.runOnQueue(.main)
+    // Plate demo (PlateDemo.swift): tapping the plate starts it; these end or restart it.
+    AsyncFunction("demoFinish") { TareCaptureView.current?.demoFinish() }.runOnQueue(.main)
+    AsyncFunction("demoReset") { TareCaptureView.current?.demoReset() }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
       Prop("recording") { (view: TareCaptureView, value: Bool) in view.setRecording(value) }
@@ -54,6 +57,7 @@ public class TareCaptureModule: Module {
       Prop("captureWithoutBox") { (view: TareCaptureView, value: Bool) in view.captureWithoutBox = value }
       Prop("resetToken") { (view: TareCaptureView, value: Int) in view.resetTracking(value) }
       Prop("forceMultiView") { (view: TareCaptureView, value: Bool) in view.setForceMultiView(value) }
+      Prop("demoMode") { (view: TareCaptureView, value: Bool) in view.setDemoMode(value) }
     }
   }
 }
@@ -102,8 +106,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private var frames: [[String: Any]] = []
   private var manifest: [String: Any] = [:]
   // Depth: `cloud` and `tracker` are accessed only on depthQueue; the rest on main.
-  private let depthQueue = DispatchQueue(label: "tare.depth", qos: .userInitiated)
-  private let cloud = PointCloud()
+  let depthQueue = DispatchQueue(label: "tare.depth", qos: .userInitiated)
+  let cloud = PointCloud()
   private let tracker = TareFeatureTracker(downscale: 2)
   private let cloudNode = SCNNode()
   private var depthMode: DepthMode = DepthMode.lidarSupported ? .lidar : .multiView
@@ -114,6 +118,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private var lastCloudRender: TimeInterval = 0
   private var cloudPoints = 0
   private var activeTracks = 0
+  let demo = PlateDemo() // Plate demo state (PlateDemo.swift); main thread.
   var rimShots: [Int: RimShot] = [:] // Tap-the-rim test photos, by slot (0 overhead, 1 side).
 
   required init(appContext: AppContext? = nil) {
@@ -122,6 +127,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     cloudNode.name = "tare.point-cloud"
     cloudNode.renderingOrder = 12
     preview.scene.rootNode.addChildNode(cloudNode)
+    demo.node.renderingOrder = 13
+    preview.scene.rootNode.addChildNode(demo.node)
     addSubview(preview)
     preview.session.delegate = self
     preview.session.delegateQueue = .main
@@ -186,9 +193,18 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     surfaces.values.forEach { $0.removeFromParentNode() }; surfaces.removeAll()
     horizontalPlanes = 0; verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
     placementHint = nil; hintUntil = 0; lastStatus = 0
-    clearDepth(); rimReset() // Rim photos' poses belong to the old world frame.
+    clearDepth(); rimReset(); demo.reset() // Rim photos and demo poses belong to the old world frame.
     runSession(reset: true)
     emit("Tracking restarted. Point down at a textured table and move slowly sideways.")
+  }
+  func setDemoMode(_ value: Bool) {
+    guard value != demo.enabled else { return }
+    demo.enabled = value; demo.reset()
+    if value { region = nil; box?.removeFromParentNode(); box = nil }
+    // The demo shows only the plate, rim and spots; depth keeps fusing for spot heights.
+    cloudNode.isHidden = value
+    preview.debugOptions = value ? [] : [.showFeaturePoints]
+    emit(value ? "Tap the middle of the plate to start." : "Tap a cyan surface near the object to place the scan box.")
   }
   func setForceMultiView(_ value: Bool) {
     let mode: DepthMode = value || !DepthMode.lidarSupported ? .multiView : .lidar
@@ -269,6 +285,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   }
   @objc private func selectRegion(_ tap: UITapGestureRecognizer) {
     guard !recording, !finishing else { return }
+    if demo.enabled { demoTap(tap.location(in: preview)); return }
     guard let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState else {
       showPlacementHint("Tracking is not ready. Move slowly sideways over a well-lit, textured table.")
       return
@@ -404,6 +421,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
     trackingDescription = tracking
     processDepth(frame)
+    if demo.enabled { demoConsider(frame) }
     if frame.timestamp - lastStatus > 1 {
       lastStatus = frame.timestamp
       // Reconcile the complete live anchor list, including anchors whose initial
@@ -423,7 +441,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       let needsCoaching = horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
       if coaching.isActive != needsCoaching { coaching.setActive(needsCoaching, animated: true) }
       let message: String
-      if recording { message = "Recording — \(count) frames saved" }
+      if demo.enabled { message = demoMessage(tracking: tracking, planes: horizontalPlanes) }
+      else if recording { message = "Recording — \(count) frames saved" }
       else if finishing { message = "Saving recording…" }
       else if let placementHint, frame.timestamp < hintUntil { message = placementHint }
       else if tracking != "normal" { message = "Move slowly sideways over a well-lit, textured table to initialize tracking." }
@@ -491,9 +510,9 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     }
   }
   func sessionWasInterrupted(_ session: ARSession) { finish(reason: "AR session interrupted; recording saved") }
-  func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); clearDepth(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
+  func sessionInterruptionEnded(_ session: ARSession) { region = nil; box?.removeFromParentNode(); clearDepth(); demo.reset(); runSession(); emit("Tracking interrupted. Place a new scan box.") }
   func session(_ session: ARSession, didFailWithError error: Error) { finish(reason: "AR session failed: \(error)"); emit("AR session error: \(error)") }
-  private func emit(_ message: String, extra: [String: Any] = [:]) {
+  func emit(_ message: String, extra: [String: Any] = [:]) {
     let inView: Int
     if let camera = preview.pointOfView {
       inView = surfaces.values.filter { $0.parent != nil && preview.isNode($0, insideFrustumOf: camera) }.count
@@ -504,7 +523,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
       "walls": verticalPlanes, "points": featurePoints, "saving": finishing,
       "depthMode": depthMode.rawValue, "lidarSupported": DepthMode.lidarSupported,
-      "cloudPoints": cloudPoints, "tracks": activeTracks]
+      "cloudPoints": cloudPoints, "tracks": activeTracks, "demo": demo.status]
     event.merge(extra) { _, new in new }; onStatus(event)
   }
   private func floats(_ m: simd_float4x4) -> [Float] {
