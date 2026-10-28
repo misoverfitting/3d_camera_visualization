@@ -39,6 +39,14 @@ public class TareCaptureModule: Module {
         presenter.present(sheet, animated: true)
       }
     }
+    // Tap-the-rim test (RimTapTest.swift), acting on the mounted camera view.
+    AsyncFunction("rimSnapshot") { (slot: Int) throws -> [String: Any] in
+      try Self.cameraView().rimSnapshot(slot: slot)
+    }.runOnQueue(.main)
+    AsyncFunction("rimMeasure") { (taps: [[[Double]]], rulerDiameterMm: Double?) throws -> [String: Any] in
+      try Self.cameraView().rimMeasure(taps: taps, rulerDiameterMm: rulerDiameterMm)
+    }.runOnQueue(.main)
+    AsyncFunction("rimReset") { TareCaptureView.current?.rimReset() }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
       Prop("recording") { (view: TareCaptureView, value: Bool) in view.setRecording(value) }
@@ -52,9 +60,17 @@ public class TareCaptureModule: Module {
 
 enum CaptureError: Error { case invalidRecording, imageEncoding }
 
+extension TareCaptureModule {
+  static func cameraView() throws -> TareCaptureView {
+    guard let view = TareCaptureView.current else { throw RimTapException("The camera is not open.") }
+    return view
+  }
+}
+
 final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   let onStatus = EventDispatcher()
-  private let preview = ARSCNView(frame: .zero)
+  static weak var current: TareCaptureView?
+  let preview = ARSCNView(frame: .zero)
   private let coaching = ARCoachingOverlayView(frame: .zero)
   private let writer = DispatchQueue(label: "tare.recording.writer", qos: .utility)
   private let imageContext = CIContext()
@@ -98,6 +114,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private var lastCloudRender: TimeInterval = 0
   private var cloudPoints = 0
   private var activeTracks = 0
+  var rimShots: [Int: RimShot] = [:] // Tap-the-rim test photos, by slot (0 overhead, 1 side).
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -144,6 +161,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   override func didMoveToWindow() {
     super.didMoveToWindow()
     guard window != nil else { finish(reason: "Camera closed; recording saved"); preview.session.pause(); return }
+    TareCaptureView.current = self
     guard ARWorldTrackingConfiguration.isSupported else { emit("AR world tracking is unavailable on this device"); return }
     AVCaptureDevice.requestAccess(for: .video) { [weak self] allowed in
       DispatchQueue.main.async {
@@ -168,7 +186,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     surfaces.values.forEach { $0.removeFromParentNode() }; surfaces.removeAll()
     horizontalPlanes = 0; verticalPlanes = 0; featurePoints = 0; trackingDescription = "initializing"
     placementHint = nil; hintUntil = 0; lastStatus = 0
-    clearDepth()
+    clearDepth(); rimReset() // Rim photos' poses belong to the old world frame.
     runSession(reset: true)
     emit("Tracking restarted. Point down at a textured table and move slowly sideways.")
   }

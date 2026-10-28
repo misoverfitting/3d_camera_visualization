@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
+import RimTest from './RimTest';
 
 type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; onStatus: (event: { nativeEvent: Status }) => void };
@@ -17,6 +18,7 @@ export default function App() {
   const [captureWithoutBox, setCaptureWithoutBox] = useState(false);
   const [resetToken, setResetToken] = useState(0);
   const [forceMultiView, setForceMultiView] = useState(false);
+  const [rimMode, setRimMode] = useState(false);
   useEffect(() => {
     capture.latestRecording().then(saved => { if (saved) setPath(saved); })
       .catch(error => setStatus({ message: `Could not load saved recordings: ${error}` }));
@@ -31,6 +33,8 @@ export default function App() {
       if (e.path) setPath(e.path);
     }} />
     <Text style={styles.copy}>{status.message}</Text>
+    <Button title={rimMode ? 'Back to scanning' : 'Plate rim test'} disabled={recording || status.saving} onPress={() => setRimMode(!rimMode)} />
+    {rimMode ? <RimTest disabled={status.tracking !== 'normal'} /> : <>
     <Text style={styles.copy}>Tracking: {status.tracking || 'initializing'} · Surfaces: {status.surfaces || 0} · Frames: {status.frames || 0}</Text>
     <Text style={styles.copy}>Walls: {status.walls || 0} · Feature points: {status.points || 0}</Text>
     <Text style={styles.copy}>Surface overlays: {status.overlays || 0} · In view: {status.overlaysInView || 0}</Text>
@@ -52,6 +56,7 @@ export default function App() {
       finally { setSharing(false); }
     }} />
     <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB, poses and a fused point cloud (points.ply). Exports stay on this phone until you share them.</Text>
+    </>}
   </SafeAreaView>;
 }
 const styles = StyleSheet.create({
