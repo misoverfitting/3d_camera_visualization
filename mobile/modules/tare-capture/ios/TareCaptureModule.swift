@@ -50,6 +50,15 @@ public class TareCaptureModule: Module {
     // Plate demo (PlateDemo.swift): tapping the plate starts it; these end or restart it.
     AsyncFunction("demoFinish") { TareCaptureView.current?.demoFinish() }.runOnQueue(.main)
     AsyncFunction("demoReset") { TareCaptureView.current?.demoReset() }.runOnQueue(.main)
+    AsyncFunction("demoIdentify") { (promise: Promise) in
+      guard let view = TareCaptureView.current else { return promise.reject(RimTapException("The camera is not open.")) }
+      view.demoIdentify { result in
+        switch result {
+        case .success(let status): promise.resolve(status)
+        case .failure(let error): promise.reject(error)
+        }
+      }
+    }.runOnQueue(.main)
     AsyncFunction("demoNudge") { (deltaMm: Double) in TareCaptureView.current?.demoNudge(deltaMm) }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")

@@ -1,4 +1,5 @@
 import ARKit
+import CoreImage
 import SceneKit
 import simd
 
@@ -33,6 +34,10 @@ final class PlateDemo {
   var lidar: RimReference?
   /// Manual nudge added to every spot's height (demo tuning), meters.
   var heightOffsetM = 0.0
+  /// Most overhead color photo of the orbit, sent for food identification (FoodID.swift).
+  var photo: FoodPhoto?
+  var food = FoodState()
+  let ciContext = CIContext()
   let node = SCNNode()
   let queue = DispatchQueue(label: "tare.demo", qos: .userInitiated)
 
@@ -42,6 +47,7 @@ final class PlateDemo {
   func reset() {
     stage = .idle; table = nil; taps = []; selector = nil; views = []; lastPose = nil; hint = nil
     fit = nil; fitError = nil; spots = []; lidar = nil; fittedViews = 0; finalPending = false; generation += 1
+    photo = nil; food = FoodState()
     node.childNodes.forEach { $0.removeFromParentNode() }
   }
 
@@ -55,6 +61,8 @@ final class PlateDemo {
     }
     out["heightOffsetMm"] = 1000 * heightOffsetM
     if let lidar { out["lidar"] = ["diameterMm": 2000 * lidar.radiusM, "heightMm": 1000 * lidar.heightM] }
+    out["food"] = food.status
+    out["hasPhoto"] = photo != nil
     return out
   }
 
@@ -150,6 +158,7 @@ extension TareCaptureView {
     if keyframe.id % 2 == 0, let depth = frame.smoothedSceneDepth ?? frame.sceneDepth {
       keyframe.depth = DepthFrame(depth, imageIntrinsics: CameraIntrinsics(frame.camera), worldFromCamera: keyframe.worldFromCamera)
     }
+    considerFoodPhoto(frame, pose: keyframe.worldFromCamera)
     demo.building += 1
     let buffer = frame.capturedImage, generation = demo.generation
     demo.queue.async { [weak self] in
@@ -241,6 +250,8 @@ extension TareCaptureView {
     demo.node.addChildNode(ring)
     // Flat discs lying on the surface read as "on the plate"; spheres looked like they floated.
     let up = SIMD3<Float>(table.normalWorld)
+    // Once food is labeled, its points replace the generic ring of probe spots.
+    if !demo.food.items.isEmpty { drawFood(table: table); return }
     for spot in demo.spots {
       let disc = SCNCylinder(radius: 0.006, height: 0.001)
       disc.materials = [demoMaterial(spot.measuredSurface ? .systemOrange : .systemRed)]
@@ -251,7 +262,7 @@ extension TareCaptureView {
     }
   }
 
-  private func demoMaterial(_ color: UIColor) -> SCNMaterial {
+  func demoMaterial(_ color: UIColor) -> SCNMaterial {
     let material = SCNMaterial()
     material.diffuse.contents = color
     material.lightingModel = .constant
@@ -260,6 +271,6 @@ extension TareCaptureView {
   }
 }
 
-private extension SIMD4 where Scalar == Float {
+extension SIMD4 where Scalar == Float {
   var xyz: SIMD3<Float> { SIMD3(x, y, z) }
 }

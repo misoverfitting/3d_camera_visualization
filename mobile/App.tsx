@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import RimTest from './RimTest';
 
-type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number };
+type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food };
+type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; items: { label: string; category: string; confidence: number; color: string; points: number }[] };
 type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; demoMode: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
-const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void> }>('TareCapture');
+const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(): Promise<Food> }>('TareCapture');
 type Mode = 'demo' | 'rim' | 'scan';
 const MODES: [Mode, string][] = [['demo', 'Plate demo'], ['rim', 'Rim taps'], ['scan', 'Scan']];
 
@@ -67,17 +68,35 @@ export default function App() {
 }
 
 function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
+  // Identify the food once per finished scan, as soon as the rim and photo are ready.
+  const asked = useRef(false);
+  const ready = demo?.stage === 'done' && !!demo.rim && !!demo.hasPhoto && !demo.fitting;
+  useEffect(() => {
+    if (demo?.stage !== 'done') asked.current = false;
+    else if (ready && !asked.current && demo.food?.phase === 'idle') {
+      asked.current = true;
+      capture.demoIdentify().catch(() => {});  // Errors arrive in the status as food.error.
+    }
+  }, [demo?.stage, ready, demo?.food?.phase]);
   if (!demo) return null;
   const rim = demo.rim;
+  const food = demo.food;
   return <View>
     {demo.stage !== 'idle' ? <Text style={styles.copy}>
       {demo.views} views · {Math.round(demo.coverage * 100)}% of the hemisphere{demo.taps > 1 ? ` · ${demo.taps} taps` : ''}{demo.fitting ? ' · fitting…' : ''}
     </Text> : null}
-    {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high · {demo.spots} probe spots 1 in inside</Text> : null}
+    {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high{food?.items.length ? '' : ` · ${demo.spots} probe spots 1 in inside`}</Text> : null}
     {demo.lidar && rim ? <Text style={styles.copy}>LiDAR check: Ø {demo.lidar.diameterMm.toFixed(0)} mm ({(rim.diameterMm - demo.lidar.diameterMm >= 0 ? '+' : '')}{(rim.diameterMm - demo.lidar.diameterMm).toFixed(0)} mm) · {demo.lidar.heightMm.toFixed(0)} mm high</Text>
       : demo.stage === 'done' && lidar && rim ? <Text style={styles.copy}>LiDAR check unavailable for this plate.</Text> : null}
+    {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food…</Text> : null}
+    {food?.phase === 'failed' ? <Text style={styles.error}>{food.error}</Text> : null}
+    {food?.items.map((item, i) => <View key={i} style={styles.legend}>
+      <View style={[styles.swatch, { backgroundColor: item.color }]} />
+      <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ' · unsure' : ''}</Text>
+    </View>)}
+    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => capture.demoIdentify().catch(() => {})} /> : null}
     {demo.spots > 0 ? <View style={styles.row}>
-      <Button title="Spots down 2 mm" onPress={() => capture.demoNudge(-2)} />
+      <Button title="Points down 2 mm" onPress={() => capture.demoNudge(-2)} />
       <Text>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
       <Button title="Up 2 mm" onPress={() => capture.demoNudge(2)} />
     </View> : null}
@@ -93,6 +112,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '600' },
   copy: { paddingVertical: 6, color: '#333' },
   small: { paddingVertical: 4, color: '#666' },
+  error: { paddingVertical: 6, color: '#b00020' },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  swatch: { width: 14, height: 14, borderRadius: 7 },
   headline: { paddingVertical: 8, fontSize: 17, fontWeight: '600', color: '#111' },
   camera: { flex: 1, minHeight: 180, borderRadius: 12, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

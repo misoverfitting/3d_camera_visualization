@@ -7,3 +7,4 @@ scipy>=1.11
 plyfile>=1.0
 pillow>=10.0
 pycolmap==4.2.1
+anthropic>=2.3
