@@ -5,7 +5,8 @@ public struct ProbeSpot: Sendable {
   public var index: Int
   public var positionWorld: SIMD3<Double>
   public var surfaceHeightM: Double
-  /// False when no 3D points were near the spot and the fallback height was used.
+  /// False when no 3D points were near the spot and its height was borrowed from the
+  /// other spots (or the fallback).
   public var measuredSurface: Bool
 }
 
@@ -20,14 +21,18 @@ public enum ProbeRing {
     let center = frame.coordinates(rim.centerWorld)
     let surface = surfacePointsWorld.map { (position: frame.coordinates($0), heightM: frame.height($0)) }
       .filter { $0.heightM > -0.005 && $0.heightM < rim.heightM + 0.1 && simd_distance($0.position, center) < rim.radiusM }
-    return (0..<config.count).map { i in
+    let placed = (0..<config.count).map { i -> (position: SIMD2<Double>, heightM: Double?) in
       let angle = startAngleRad + 2 * .pi * Double(i) / Double(config.count)
       let position = center + radiusM * SIMD2(cos(angle), sin(angle))
       let nearby = surface.filter { simd_distance($0.position, position) <= config.surfaceSearchRadiusM }.map(\.heightM)
-      let measured = nearby.count >= 3 ? Numerics.percentile(nearby, 0.5) : nil
-      let heightM = measured ?? min(config.fallbackSurfaceHeightM, rim.heightM)
-      return ProbeSpot(index: i, positionWorld: frame.world(position, heightM: heightM),
-                       surfaceHeightM: heightM, measuredSurface: measured != nil)
+      return (position, nearby.count >= 3 ? Numerics.percentile(nearby, config.surfacePercentile) : nil)
+    }
+    // Unmeasured spots take the measured spots' median: the plate is level, so this beats a guess.
+    let shared = Numerics.percentile(placed.compactMap(\.heightM), 0.5) ?? min(config.fallbackSurfaceHeightM, rim.heightM)
+    return placed.enumerated().map { i, spot in
+      let heightM = spot.heightM ?? shared
+      return ProbeSpot(index: i, positionWorld: frame.world(spot.position, heightM: heightM),
+                       surfaceHeightM: heightM, measuredSurface: spot.heightM != nil)
     }
   }
 }

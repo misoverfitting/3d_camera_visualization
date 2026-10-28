@@ -120,6 +120,9 @@ public struct PipelineConfig: Sendable {
     public var fallbackSurfaceHeightM = 0.008
     /// Horizontal radius for collecting surface points around a spot. Source: initial guess.
     public var surfaceSearchRadiusM = 0.012
+    /// Height percentile of those points taken as the surface: low, so food edges and
+    /// depth spikes above the plate do not lift the spot. Source: initial guess.
+    public var surfacePercentile = 0.3
 
     public init() {}
   }

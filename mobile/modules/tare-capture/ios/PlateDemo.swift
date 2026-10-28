@@ -31,6 +31,8 @@ final class PlateDemo {
   var fitError: String?
   var spots: [ProbeSpot] = []
   var lidar: RimReference?
+  /// Manual nudge added to every spot's height (demo tuning), meters.
+  var heightOffsetM = 0.0
   let node = SCNNode()
   let queue = DispatchQueue(label: "tare.demo", qos: .userInitiated)
 
@@ -51,6 +53,7 @@ final class PlateDemo {
     if let rim = fit?.rim {
       out["rim"] = ["diameterMm": 2000 * rim.radiusM, "heightMm": 1000 * rim.heightM, "support": rim.confidence]
     }
+    out["heightOffsetMm"] = 1000 * heightOffsetM
     if let lidar { out["lidar"] = ["diameterMm": 2000 * lidar.radiusM, "heightMm": 1000 * lidar.heightM] }
     return out
   }
@@ -110,6 +113,12 @@ extension TareCaptureView {
     guard demo.stage == .capturing else { return }
     demo.stage = .done
     runDemoFit(final: true)
+  }
+
+  func demoNudge(_ deltaMm: Double) {
+    demo.heightOffsetM = min(0.05, max(-0.05, demo.heightOffsetM + deltaMm / 1000))
+    drawDemo()
+    emit(String(format: "Probe spots moved to %+.0f mm.", 1000 * demo.heightOffsetM))
   }
 
   func demoReset() {
@@ -230,11 +239,15 @@ extension TareCaptureView {
     ring.simdPosition = SIMD3<Float>(rim.centerWorld)
     ring.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: SIMD3<Float>(table.normalWorld))
     demo.node.addChildNode(ring)
+    // Flat discs lying on the surface read as "on the plate"; spheres looked like they floated.
+    let up = SIMD3<Float>(table.normalWorld)
     for spot in demo.spots {
-      let sphere = SCNNode(geometry: SCNSphere(radius: 0.006))
-      sphere.geometry?.materials = [demoMaterial(spot.measuredSurface ? .systemOrange : .systemRed)]
-      sphere.simdPosition = SIMD3<Float>(spot.positionWorld)
-      demo.node.addChildNode(sphere)
+      let disc = SCNCylinder(radius: 0.006, height: 0.001)
+      disc.materials = [demoMaterial(spot.measuredSurface ? .systemOrange : .systemRed)]
+      let node = SCNNode(geometry: disc)
+      node.simdPosition = SIMD3<Float>(spot.positionWorld + (demo.heightOffsetM + 0.0005) * table.normalWorld)
+      node.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: up)
+      demo.node.addChildNode(node)
     }
   }
 

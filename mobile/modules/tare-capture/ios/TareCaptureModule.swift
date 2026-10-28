@@ -50,6 +50,7 @@ public class TareCaptureModule: Module {
     // Plate demo (PlateDemo.swift): tapping the plate starts it; these end or restart it.
     AsyncFunction("demoFinish") { TareCaptureView.current?.demoFinish() }.runOnQueue(.main)
     AsyncFunction("demoReset") { TareCaptureView.current?.demoReset() }.runOnQueue(.main)
+    AsyncFunction("demoNudge") { (deltaMm: Double) in TareCaptureView.current?.demoNudge(deltaMm) }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
       Prop("recording") { (view: TareCaptureView, value: Bool) in view.setRecording(value) }

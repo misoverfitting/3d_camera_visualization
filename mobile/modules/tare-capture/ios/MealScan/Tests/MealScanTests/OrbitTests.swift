@@ -122,7 +122,7 @@ final class OrbitTests: XCTestCase {
     let rim = RimEstimate(centerWorld: Synthetic.dishCenter + SIMD3(0, 0.02, 0), radiusM: 0.13, heightM: 0.02,
                           radiusUncertaintyM: nil, heightUncertaintyM: nil, rmsResidualPx: 0,
                           method: .orbitEdges, viewCount: 12, confidence: 1)
-    // Surface points 15 mm up, only on the +X half of the plate.
+    // Surface points 15 mm up, only on the +X half of the plate; unmeasured spots borrow their height.
     let center = Synthetic.table.coordinates2D(Synthetic.dishCenter)
     let points = stride(from: 0.0, to: 0.12, by: 0.004).flatMap { x in
       stride(from: -0.12, to: 0.12, by: 0.004).map { z in Synthetic.table.pointWorld(at: center + SIMD2(x, z), heightM: 0.015) }
@@ -135,9 +135,11 @@ final class OrbitTests: XCTestCase {
       if offset.x > 0.01 {
         XCTAssertTrue(spot.measuredSurface); XCTAssertEqual(spot.surfaceHeightM, 0.015, accuracy: 1e-9)
       } else if offset.x < -0.02 {
-        XCTAssertFalse(spot.measuredSurface); XCTAssertEqual(spot.surfaceHeightM, 0.008, accuracy: 1e-9)
+        XCTAssertFalse(spot.measuredSurface); XCTAssertEqual(spot.surfaceHeightM, 0.015, accuracy: 1e-9)
       }
       XCTAssertEqual(Synthetic.table.signedDistanceM(spot.positionWorld), spot.surfaceHeightM, accuracy: 1e-9)
     }
+    // With no points at all, the fallback plate-floor height is used.
+    XCTAssertEqual(ProbeRing.spots(rim: rim, tablePlane: Synthetic.table).map(\.surfaceHeightM), Array(repeating: 0.008, count: 8))
   }
 }
