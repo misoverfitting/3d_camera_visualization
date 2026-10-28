@@ -68,3 +68,13 @@ def test_token_is_enforced_when_configured(api, monkeypatch):
     files = {"image": ("a.jpg", JPEG, "image/jpeg")}
     assert client.post("/api/food/identify", files=files).status_code == 401
     assert client.post("/api/food/identify", files=files, headers={"X-Tare-Token": "secret"}).json() == {"items": [], "model": "claude-opus-5-5"}
+
+
+def test_uploads_are_saved_for_the_dataset_when_enabled(api, monkeypatch, tmp_path):
+    monkeypatch.setattr(food_vision, "SAVE_UPLOADS", True)
+    monkeypatch.setattr(food_vision, "UPLOADS_DIR", tmp_path)
+    client, _ = api(scene(Item(label="rice", category="starch", confidence=0.9, box=[0.1, 0.1, 0.4, 0.4],
+                               points=[Point(x=0.2, y=0.2), Point(x=0.3, y=0.3)])))
+    assert client.post("/api/food/identify", files={"image": ("a.jpg", JPEG, "image/jpeg")}).status_code == 200
+    saved = sorted(tmp_path.rglob("*"))
+    assert [p.suffix for p in saved if p.is_file()] == [".jpg", ".json"]
