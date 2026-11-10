@@ -17,3 +17,4 @@ mobile/modules/tare-capture/ios/vendor/
 **/.build/
 ml/data/
 ml/.venv/
+ml/plateitems-cli/.build/

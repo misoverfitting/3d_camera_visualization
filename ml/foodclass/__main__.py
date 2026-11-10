@@ -2,6 +2,7 @@
 
     python -m foodclass prepare        # Food-101 + FoodSeg103 crops (+ --extra autolabel classify/ dirs)
     python -m foodclass train          # MobileNetV3-Large from ImageNet weights, resumable
+    python -m foodclass nutrition5k    # pseudo-label Nutrition5k crops with that model, then train again
     python -m foodclass export         # Core ML, compiled into the app's Assets
 """
 from __future__ import annotations
@@ -31,6 +32,9 @@ def main() -> None:
     t.add_argument("--lr", type=float, default=1.5e-3)
     t.add_argument("--workers", type=int, default=8)
     t.add_argument("--limit", type=int)
+    n = sub.add_parser("nutrition5k")
+    n.add_argument("--root", type=Path, default=ML / "data" / "nutrition5k")
+    n.add_argument("--cli", type=Path, default=ML / "plateitems-cli")
     e = sub.add_parser("export")
     e.add_argument("--assets", type=Path, default=ASSETS)
     args = parser.parse_args()
@@ -42,6 +46,9 @@ def main() -> None:
     elif args.command == "train":
         from .train import train
         train(args.work, args.epochs, args.batch, args.lr, args.workers, args.limit, args.size, args.freeze)
+    elif args.command == "nutrition5k":
+        from .nutrition5k import pseudo_label
+        pseudo_label(args.root, args.work, args.cli)
     else:
         from .export import export
         export(args.work, args.assets)

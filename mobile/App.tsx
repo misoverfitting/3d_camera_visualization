@@ -75,8 +75,8 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
   // Once per finished scan: identify the food as soon as the rim and photo are ready, then
   // run the probe simulation on its points (or on the ring spots if identification fails).
   const asked = useRef(false);
-  // On-device needs no network; Claude needs the backend (TARE_API_URL) with a key.
-  const [source, setSource] = useState<FoodSource>('on-device');
+  // Food ID runs on the phone (PlateItems + the bundled Core ML classifier); no network.
+  const source: FoodSource = 'on-device';
   const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting;
   const ready = fitted && !!demo?.hasPhoto;
   useEffect(() => {
@@ -97,11 +97,6 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
     {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high{food?.items.length ? '' : ` · ${demo.spots} probe spots 1 in inside`}</Text> : null}
     {demo.lidar && rim ? <Text style={styles.copy}>LiDAR check: Ø {demo.lidar.diameterMm.toFixed(0)} mm ({(rim.diameterMm - demo.lidar.diameterMm >= 0 ? '+' : '')}{(rim.diameterMm - demo.lidar.diameterMm).toFixed(0)} mm) · {demo.lidar.heightMm.toFixed(0)} mm high</Text>
       : demo.stage === 'done' && lidar && rim ? <Text style={styles.copy}>LiDAR check unavailable for this plate.</Text> : null}
-    {demo.stage !== 'idle' ? <View style={styles.row}>
-      <Text style={styles.copy}>Food ID:</Text>
-      {(['on-device', 'claude'] as FoodSource[]).map((option) => <Button key={option} title={(source === option ? '● ' : '') + (option === 'claude' ? 'Claude' : 'On-device')}
-        disabled={food?.phase === 'working'} onPress={() => setSource(option)} />)}
-    </View> : null}
     {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food{food.source === 'claude' ? ' with Claude' : ' on the phone'}…</Text> : null}
     {food?.phase === 'done' && food.model ? <Text style={styles.small}>{food.model}</Text> : null}
     {food?.phase === 'failed' ? <Text style={styles.error}>{food.error}</Text> : null}

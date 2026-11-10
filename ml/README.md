@@ -143,12 +143,25 @@ python -m foodclass train                 # MobileNetV3-Large from ImageNet weig
 python -m foodclass export                # Core ML → mobile/modules/tare-capture/ios/Assets/FoodClassifier.mlmodelc
 ```
 
+**Adding Nutrition5k.** These are overhead cafeteria plates under CC BY 4.0, with each dish's ingredients and grams but no outlines. No manual or LLM labelling is needed:
+
+```sh
+python -m foodclass.nutrition5k_download  # ~3 GB: overhead RGB + depth, metadata, official splits
+python -m foodclass train                 # 1. teacher on Food-101 + FoodSeg103
+python -m foodclass nutrition5k           # 2. app segmentation proposes items; teacher picks among each dish's listed ingredients
+python -m foodclass train                 # 3. student on all three (starts fresh: new labels)
+python -m foodclass export
+```
+
+Step 2 runs `plateitems-cli` (the app's `PlateItems` segmentation plus Vision's plate mask, macOS 14+). Each region gets the dish's *listed* visible ingredient that the teacher scores highest; ingredients outside our classes, such as arugula or quinoa, are scored through proxy classes (`nutrition5k.PROXIES`). Ambiguous or tiny regions are dropped, with the counts per reason in `data/foodclass/nutrition5k.json`. Official test dishes become `val`, so `metrics.json` reports a `nutrition5k` score in our setting. That score is measured against pseudo-labels, so spot-check crops before trusting it.
+
 Then rebuild the app. The model goes into the app bundle through the pod's `TareCaptureAssets` resource bundle.
 
 | Source | Used as | Licence |
 | --- | --- | --- |
 | Food-101 (`ethz/food101`) | Whole-dish photos, 101 classes | Research use. Fine for internal prototypes, not for shipping |
 | FoodSeg103 (`EduardoPacheco/FoodSeg103`) | One crop per ingredient on the plate, background dimmed like the app's crops | Research dataset; the Hugging Face copy is marked Apache-2.0, check the original terms before shipping |
+| Nutrition5k (`gs://nutrition5k_dataset`) | Pseudo-labelled item crops from overhead plates (see above) | CC BY 4.0: commercial use with attribution |
 | Auto-labelled dataset | `prepare --extra <export>/classify`: our own crops; their test and golden splits stay out | Ours |
 
 Labels from the two datasets are merged by name (`foodclass/labels.py`). Each label also gets the app's coarse category from keyword rules.

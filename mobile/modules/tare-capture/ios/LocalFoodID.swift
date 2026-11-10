@@ -72,11 +72,39 @@ final class LocalFoodClassifier {
                                      ring: zip(inside, bare).map { $0 && !$1 })
 
     let full = CIImage(cgImage: image)
-    return try regions.compactMap { region in
+    let results = try regions.compactMap { region -> LocalFoodResult? in
       guard let crop = itemCrop(full, region: region, context: context) else { return nil }
       let top = try classify(crop)
       guard let best = top.first else { return nil }
       return LocalFoodResult(label: best.0, category: categories[best.0] ?? "other", confidence: best.1, topK: top, points: region.points)
+    }
+    return Self.mergeSameLabel(results)
+  }
+
+  /// Color clustering often splits one food (light and shaded rice, say) into several
+  /// regions; regions that get the same label are one item, keeping 3 well-spread points.
+  static func mergeSameLabel(_ results: [LocalFoodResult]) -> [LocalFoodResult] {
+    var merged: [LocalFoodResult] = []
+    for result in results {
+      if let i = merged.firstIndex(where: { $0.label == result.label }) {
+        merged[i].points += result.points
+        merged[i].confidence = max(merged[i].confidence, result.confidence)
+      } else {
+        merged.append(result)
+      }
+    }
+    return merged.map { item in
+      var item = item
+      guard item.points.count > 3 else { return item }
+      var chosen = [item.points[0]]  // Points of the largest region come first.
+      while chosen.count < 3 {
+        let next = item.points.max { a, b in
+          chosen.map { simd_distance(a, $0) }.min()! < chosen.map { simd_distance(b, $0) }.min()!
+        }!
+        chosen.append(next)
+      }
+      item.points = chosen
+      return item
     }
   }
 
