@@ -292,7 +292,28 @@ Labelling starts automatically about a second after the ring turns green ("Ident
 - **Identify again** re-runs labelling on the same photo and costs another call.
 - **Restart** clears everything for a new plate.
 
-### 7. Things worth trying
+### 7. Probe simulation
+
+When labelling finishes, the prototype probe pen (`modules/tare-capture/ios/Assets/probe-pen.glb`) appears and probes every point on its own. If labelling fails or there is no backend, it probes the 8 ring spots instead.
+
+**What happens for each point** (about 2.5 s):
+1. The pen fades in above the plate, tilted 30° from vertical and leaning to the side so you see it side-on with the button facing you. The slider moves forward and the blade comes out of the nose.
+2. The pen glides to hover about 3 cm above the point, then pushes the blade in along its own axis.
+   - Food points: the tip goes 60% of the item's height above the plate into the food, between 3 and 15 mm.
+   - Ring spots: the tip just touches the surface.
+3. The red confirm button clicks, the LED blinks twice, and a ring in the point's colour pulses outward. A white ring stays around the disc to show that spot is measured.
+4. The pen pulls back and moves to the nearest unprobed point.
+
+After the last point, the blade retracts and the pen lifts away and fades out. The headline shows "Probing <item> (k of n)…" while it runs, then "Probed n spots."
+
+**Check:**
+- The blade tip meets each disc's centre.
+- The blade below the surface is hidden when you look from above, so it looks like it goes into the food. A depth-only disc of 3 cm radius at each point does this. From a low side angle you may still see the blade through the food, because AR content isn't occluded by real objects.
+- The pen is to scale: 157 mm body, 139 mm slider travel.
+
+**Controls:** **Simulate probing** (or **Probe again**) replays it. **Restart** stops it.
+
+### 8. Things worth trying
 
 - Two plates on the table. Tap one; the other should be ignored.
 - A bowl instead of a plate. The rim height should read 5–8 cm, not about 2 cm.
@@ -362,6 +383,9 @@ Each measurement is saved to the phone. In the Files app, open On My iPhone → 
 | Ring of probe spots | `…/MealScan/ProbeRing.swift` |
 | Crop mapping, lifting food points to 3D | `…/MealScan/FoodPoints.swift` |
 | Tunables (all "initial guess") | `…/MealScan/PipelineConfig.swift` (`Orbit`, `EdgeRim`, `Probe`) |
+| Probe pen model (glTF binary, from the prototype design) | `mobile/modules/tare-capture/ios/Assets/probe-pen.glb` |
+| Model reader, pen rig, stroke poses | `…/MealScan/GLBModel.swift`, `…/MealScan/ProbeStroke.swift` |
+| Probe animation | `mobile/modules/tare-capture/ios/ProbeSim.swift` |
 | Demo flow, AR drawing | `mobile/modules/tare-capture/ios/PlateDemo.swift` |
 | Overhead photo, upload, food points | `mobile/modules/tare-capture/ios/FoodID.swift` |
 | Rim taps mode | `mobile/modules/tare-capture/ios/RimTapTest.swift`, `mobile/RimTest.tsx` |

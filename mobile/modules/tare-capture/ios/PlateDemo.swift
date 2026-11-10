@@ -37,6 +37,8 @@ final class PlateDemo {
   /// Most overhead color photo of the orbit, sent for food identification (FoodID.swift).
   var photo: FoodPhoto?
   var food = FoodState()
+  /// The prototype probe pen visiting each point (ProbeSim.swift).
+  let probe = ProbeSim()
   let ciContext = CIContext()
   let node = SCNNode()
   let queue = DispatchQueue(label: "tare.demo", qos: .userInitiated)
@@ -47,7 +49,7 @@ final class PlateDemo {
   func reset() {
     stage = .idle; table = nil; taps = []; selector = nil; views = []; lastPose = nil; hint = nil
     fit = nil; fitError = nil; spots = []; lidar = nil; fittedViews = 0; finalPending = false; generation += 1
-    photo = nil; food = FoodState()
+    photo = nil; food = FoodState(); probe.stop()
     node.childNodes.forEach { $0.removeFromParentNode() }
   }
 
@@ -63,6 +65,7 @@ final class PlateDemo {
     if let lidar { out["lidar"] = ["diameterMm": 2000 * lidar.radiusM, "heightMm": 1000 * lidar.heightM] }
     out["food"] = food.status
     out["hasPhoto"] = photo != nil
+    out["probe"] = probe.status
     return out
   }
 
@@ -229,6 +232,9 @@ extension TareCaptureView {
       }
     case .done:
       if demo.fitting || demo.finalPending { return "Finding the rim…" }
+      let probe = demo.probe
+      if probe.running { return "Probing \(probe.current ?? "the plate") (\(min(probe.done + 1, probe.total)) of \(probe.total))…" }
+      if probe.total > 0 && probe.done == probe.total { return "Probed \(probe.total) spot\(probe.total == 1 ? "" : "s")." }
       return demo.fit == nil ? "Could not find the rim. Restart and circle more slowly." : "Done. Probe spots are on the plate."
     }
   }

@@ -59,6 +59,7 @@ public class TareCaptureModule: Module {
         }
       }
     }.runOnQueue(.main)
+    AsyncFunction("demoProbe") { TareCaptureView.current?.demoProbe() }.runOnQueue(.main)
     AsyncFunction("demoNudge") { (deltaMm: Double) in TareCaptureView.current?.demoNudge(deltaMm) }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
@@ -139,6 +140,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     preview.scene.rootNode.addChildNode(cloudNode)
     demo.node.renderingOrder = 13
     preview.scene.rootNode.addChildNode(demo.node)
+    preview.scene.rootNode.addChildNode(demo.probe.node)
     addSubview(preview)
     preview.session.delegate = self
     preview.session.delegateQueue = .main

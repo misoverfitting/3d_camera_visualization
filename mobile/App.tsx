@@ -3,12 +3,12 @@ import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import RimTest from './RimTest';
 
-type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food };
+type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
 type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; items: { label: string; category: string; confidence: number; color: string; points: number }[] };
 type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; demoMode: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
-const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(): Promise<Food> }>('TareCapture');
+const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(): Promise<Food>; demoProbe(): Promise<void> }>('TareCapture');
 type Mode = 'demo' | 'rim' | 'scan';
 const MODES: [Mode, string][] = [['demo', 'Plate demo'], ['rim', 'Rim taps'], ['scan', 'Scan']];
 
@@ -67,17 +67,23 @@ export default function App() {
   </SafeAreaView>;
 }
 
+// Errors arrive in the status as food.error; the ring spots are probed instead.
+const identifyThenProbe = () => { capture.demoIdentify().catch(() => {}).then(() => capture.demoProbe()); };
+
 function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
-  // Identify the food once per finished scan, as soon as the rim and photo are ready.
+  // Once per finished scan: identify the food as soon as the rim and photo are ready, then
+  // run the probe simulation on its points (or on the ring spots if identification fails).
   const asked = useRef(false);
-  const ready = demo?.stage === 'done' && !!demo.rim && !!demo.hasPhoto && !demo.fitting;
+  const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting;
+  const ready = fitted && !!demo?.hasPhoto;
   useEffect(() => {
     if (demo?.stage !== 'done') asked.current = false;
-    else if (ready && !asked.current && demo.food?.phase === 'idle') {
+    else if (fitted && !asked.current && demo.food?.phase === 'idle') {
       asked.current = true;
-      capture.demoIdentify().catch(() => {});  // Errors arrive in the status as food.error.
+      if (ready) identifyThenProbe();
+      else capture.demoProbe();
     }
-  }, [demo?.stage, ready, demo?.food?.phase]);
+  }, [demo?.stage, fitted, ready, demo?.food?.phase]);
   if (!demo) return null;
   const rim = demo.rim;
   const food = demo.food;
@@ -94,7 +100,9 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
       <View style={[styles.swatch, { backgroundColor: item.color }]} />
       <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ' · unsure' : ''}</Text>
     </View>)}
-    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => capture.demoIdentify().catch(() => {})} /> : null}
+    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={identifyThenProbe} /> : null}
+    {demo.probe?.running ? <Text style={styles.copy}>Probing {Math.min(demo.probe.done + 1, demo.probe.total)} of {demo.probe.total}…</Text>
+      : fitted && food?.phase !== 'working' ? <Button title={demo.probe?.done ? 'Probe again' : 'Simulate probing'} onPress={() => capture.demoProbe()} /> : null}
     {demo.spots > 0 ? <View style={styles.row}>
       <Button title="Points down 2 mm" onPress={() => capture.demoNudge(-2)} />
       <Text>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
