@@ -128,3 +128,29 @@ Real SAM (`facebook/sam-vit-base`, on Apple MPS) was also checked on a synthetic
 ## Next: training
 
 `classify/` is ready for an ImageFolder classifier: MobileNetV3 / EfficientNet-Lite fine-tuned from Food-101, per §6.11. `annotations/*.json` with `masks/` is ready for fine-tuning a promptable segmenter or an instance-segmentation model, per §6.9. Both then convert to Core ML with `coremltools`.
+
+# On-device classifier (`ml/foodclass`)
+
+Names each food item on the phone, with no network. The app finds the items itself (`PlateItems.swift`: pixels inside the rim that differ from the bare plate in colour or texture, split into items by colour and connectivity), crops each one the same way the auto-labeller does, and runs this classifier on the crop.
+
+```sh
+cd ml && . .venv/bin/activate            # Python 3.12: coremltools does not support 3.13 yet
+pip install -r requirements.txt coremltools torchvision pyarrow huggingface_hub
+python -c "from huggingface_hub import snapshot_download as d; d('ethz/food101', repo_type='dataset', local_dir='data/food101'); d('EduardoPacheco/FoodSeg103', repo_type='dataset', local_dir='data/FoodSeg103')"
+
+python -m foodclass prepare               # ~100k training images in data/foodclass
+python -m foodclass train                 # MobileNetV3-Large from ImageNet weights; resumable
+python -m foodclass export                # Core ML → mobile/modules/tare-capture/ios/Assets/FoodClassifier.mlmodelc
+```
+
+Then rebuild the app. The model goes into the app bundle through the pod's `TareCaptureAssets` resource bundle.
+
+| Source | Used as | Licence |
+| --- | --- | --- |
+| Food-101 (`ethz/food101`) | Whole-dish photos, 101 classes | Research use. Fine for internal prototypes, not for shipping |
+| FoodSeg103 (`EduardoPacheco/FoodSeg103`) | One crop per ingredient on the plate, background dimmed like the app's crops | Research dataset; the Hugging Face copy is marked Apache-2.0, check the original terms before shipping |
+| Auto-labelled dataset | `prepare --extra <export>/classify`: our own crops; their test and golden splits stay out | Ours |
+
+Labels from the two datasets are merged by name (`foodclass/labels.py`). Each label also gets the app's coarse category from keyword rules.
+
+`data/foodclass/metrics.json` records validation top-1 and top-5 per source after every epoch. Validation on FoodSeg103 crops is the number that matters for the app, because it uses the same kind of item crop. Food-101 validation uses whole-dish photos.

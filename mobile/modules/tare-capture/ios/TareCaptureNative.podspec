@@ -13,8 +13,9 @@ Pod::Spec.new do |s|
   # Top level only (vendor/ holds OpenCV's own headers), plus the pure-Swift
   # MealScan pipeline core, which is also a standalone package for `swift test`.
   s.source_files = '*.{h,mm,swift}', 'MealScan/Sources/**/*.swift'
-  # The prototype probe pen for the probing simulation (ProbeSim.swift).
-  s.resource_bundles = { 'TareCaptureAssets' => ['Assets/*.glb'] }
+  # Probe pen model (ProbeSim.swift) and the on-device food classifier (LocalFoodID.swift,
+  # built by `python -m foodclass export`).
+  s.resource_bundles = { 'TareCaptureAssets' => ['Assets/*.glb', 'Assets/*.mlmodelc'] }
   s.public_header_files = 'TareFeatureTracker.h'
   # Fetched by mobile/scripts/fetch-opencv.sh (npm postinstall); not committed.
   s.vendored_frameworks = 'vendor/opencv2.framework'

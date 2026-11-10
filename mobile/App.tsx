@@ -4,11 +4,12 @@ import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core
 import RimTest from './RimTest';
 
 type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
-type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; items: { label: string; category: string; confidence: number; color: string; points: number }[] };
+type FoodSource = 'on-device' | 'claude';
+type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; source?: FoodSource; model?: string; items: { label: string; category: string; confidence: number; color: string; points: number; alternatives?: string[] }[] };
 type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; demoMode: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
-const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(): Promise<Food>; demoProbe(): Promise<void> }>('TareCapture');
+const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(source: FoodSource): Promise<Food>; demoProbe(): Promise<void> }>('TareCapture');
 type Mode = 'demo' | 'rim' | 'scan';
 const MODES: [Mode, string][] = [['demo', 'Plate demo'], ['rim', 'Rim taps'], ['scan', 'Scan']];
 
@@ -68,19 +69,21 @@ export default function App() {
 }
 
 // Errors arrive in the status as food.error; the ring spots are probed instead.
-const identifyThenProbe = () => { capture.demoIdentify().catch(() => {}).then(() => capture.demoProbe()); };
+const identifyThenProbe = (source: FoodSource) => { capture.demoIdentify(source).catch(() => {}).then(() => capture.demoProbe()); };
 
 function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
   // Once per finished scan: identify the food as soon as the rim and photo are ready, then
   // run the probe simulation on its points (or on the ring spots if identification fails).
   const asked = useRef(false);
+  // On-device needs no network; Claude needs the backend (TARE_API_URL) with a key.
+  const [source, setSource] = useState<FoodSource>('on-device');
   const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting;
   const ready = fitted && !!demo?.hasPhoto;
   useEffect(() => {
     if (demo?.stage !== 'done') asked.current = false;
     else if (fitted && !asked.current && demo.food?.phase === 'idle') {
       asked.current = true;
-      if (ready) identifyThenProbe();
+      if (ready) identifyThenProbe(source);
       else capture.demoProbe();
     }
   }, [demo?.stage, fitted, ready, demo?.food?.phase]);
@@ -94,13 +97,19 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
     {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high{food?.items.length ? '' : ` · ${demo.spots} probe spots 1 in inside`}</Text> : null}
     {demo.lidar && rim ? <Text style={styles.copy}>LiDAR check: Ø {demo.lidar.diameterMm.toFixed(0)} mm ({(rim.diameterMm - demo.lidar.diameterMm >= 0 ? '+' : '')}{(rim.diameterMm - demo.lidar.diameterMm).toFixed(0)} mm) · {demo.lidar.heightMm.toFixed(0)} mm high</Text>
       : demo.stage === 'done' && lidar && rim ? <Text style={styles.copy}>LiDAR check unavailable for this plate.</Text> : null}
-    {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food…</Text> : null}
+    {demo.stage !== 'idle' ? <View style={styles.row}>
+      <Text style={styles.copy}>Food ID:</Text>
+      {(['on-device', 'claude'] as FoodSource[]).map((option) => <Button key={option} title={(source === option ? '● ' : '') + (option === 'claude' ? 'Claude' : 'On-device')}
+        disabled={food?.phase === 'working'} onPress={() => setSource(option)} />)}
+    </View> : null}
+    {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food{food.source === 'claude' ? ' with Claude' : ' on the phone'}…</Text> : null}
+    {food?.phase === 'done' && food.model ? <Text style={styles.small}>{food.model}</Text> : null}
     {food?.phase === 'failed' ? <Text style={styles.error}>{food.error}</Text> : null}
     {food?.items.map((item, i) => <View key={i} style={styles.legend}>
       <View style={[styles.swatch, { backgroundColor: item.color }]} />
-      <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ' · unsure' : ''}</Text>
+      <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ` · unsure (${Math.round(item.confidence * 100)}%)` : ''}{item.alternatives?.length && item.confidence < 0.6 ? ` · or ${item.alternatives.join(', ')}` : ''}</Text>
     </View>)}
-    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={identifyThenProbe} /> : null}
+    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => identifyThenProbe(source)} /> : null}
     {demo.probe?.running ? <Text style={styles.copy}>Probing {Math.min(demo.probe.done + 1, demo.probe.total)} of {demo.probe.total}…</Text>
       : fitted && food?.phase !== 'working' ? <Button title={demo.probe?.done ? 'Probe again' : 'Simulate probing'} onPress={() => capture.demoProbe()} /> : null}
     {demo.spots > 0 ? <View style={styles.row}>

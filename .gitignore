@@ -16,3 +16,4 @@ mobile/.build-temp/
 mobile/modules/tare-capture/ios/vendor/
 **/.build/
 ml/data/
+ml/.venv/
