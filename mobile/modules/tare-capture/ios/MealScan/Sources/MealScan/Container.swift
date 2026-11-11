@@ -2,7 +2,7 @@ import simd
 
 public enum ContainerType: String, Codable, Sendable { case plate, bowl, other }
 public enum ContainerShape: String, Codable, Sendable { case round, polygon }
-public enum SizingMethod: String, Codable, Sendable { case twoView, singleView }
+public enum SizingMethod: String, Codable, Sendable { case twoView, singleView, orbitEdges }
 
 /// Rim keypoints detected in one keyframe (tare_impl.md §6.4): pixels on the outer
 /// rim, each with a weight in 0...1 from predicted visibility/uncertainty. Keypoints

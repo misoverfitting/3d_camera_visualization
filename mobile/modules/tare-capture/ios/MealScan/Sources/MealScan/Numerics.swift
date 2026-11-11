@@ -91,6 +91,39 @@ enum Numerics {
     return (params, computeJacobian(params) ?? jacobian, current)
   }
 
+  /// Derivative-free Nelder-Mead minimization; `steps` sets the initial simplex.
+  static func nelderMead(initial: [Double], steps: [Double], maxEvaluations: Int,
+                         objective: ([Double]) -> Double) -> (params: [Double], value: Double) {
+    let n = initial.count
+    var simplex = [initial] + (0..<n).map { i -> [Double] in var p = initial; p[i] += steps[i]; return p }
+    var values = simplex.map(objective)
+    var evaluations = n + 1
+    func combine(_ a: [Double], _ b: [Double], _ t: Double) -> [Double] { zip(a, b).map { $0 + t * ($1 - $0) } }
+    while evaluations < maxEvaluations {
+      let order = values.indices.sorted { values[$0] < values[$1] }
+      simplex = order.map { simplex[$0] }; values = order.map { values[$0] }
+      if abs(values[n] - values[0]) < 1e-12 { break }
+      let centroid = (0..<n).map { j in simplex[0..<n].reduce(0) { $0 + $1[j] } / Double(n) }
+      let reflected = combine(centroid, simplex[n], -1), fr = objective(reflected); evaluations += 1
+      if fr < values[0] {
+        let expanded = combine(centroid, simplex[n], -2), fe = objective(expanded); evaluations += 1
+        (simplex[n], values[n]) = fe < fr ? (expanded, fe) : (reflected, fr)
+      } else if fr < values[n - 1] {
+        (simplex[n], values[n]) = (reflected, fr)
+      } else {
+        let contracted = combine(centroid, simplex[n], 0.5), fc = objective(contracted); evaluations += 1
+        if fc < values[n] {
+          (simplex[n], values[n]) = (contracted, fc)
+        } else {
+          for i in 1...n { simplex[i] = combine(simplex[0], simplex[i], 0.5); values[i] = objective(simplex[i]) }
+          evaluations += n
+        }
+      }
+    }
+    let best = values.indices.min { values[$0] < values[$1] }!
+    return (simplex[best], values[best])
+  }
+
   /// Linear-interpolated percentile of unsorted values, q in 0...1.
   static func percentile(_ values: [Double], _ q: Double) -> Double? {
     guard !values.isEmpty else { return nil }
