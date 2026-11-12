@@ -5,8 +5,9 @@ import SceneKit
 import simd
 
 // Food identification for the plate demo: the most overhead orbit photo, cropped to
-// the plate, goes to the backend (server/app/food_vision.py), which asks Claude for
-// each item's label and 2-3 points inside it. Points are lifted onto the plate with
+// the plate, is labeled on the phone (LocalFoodID.swift, logged by FoodScanLog.swift) or,
+// legacy, by the backend (server/app/food_vision.py), which asks Claude for each item's
+// label and 2-3 points inside it. Points are lifted onto the plate with
 // LiDAR depth when available (else the plate surface plane) and drawn in the item's color.
 
 struct FoodPhoto {
@@ -33,6 +34,11 @@ struct FoodState {
   /// "on-device" or "claude".
   var source = "on-device"
   var model: String?
+  /// Whole-plate dish guess (Food-101 classes), best first.
+  var dish: [(String, Double)] = []
+  /// Folder of this scan in the field log, and how many scans are saved.
+  var saved: String?
+  var savedCount = 0
 
   static let palette: [(UIColor, String)] = [
     "#E4572E", "#17BEBB", "#FFC914", "#76B041", "#B07CFF", "#FF6F91", "#2E86AB", "#F18F01",
@@ -46,6 +52,11 @@ struct FoodState {
     var out: [String: Any] = ["phase": phase.rawValue, "source": source]
     if let error { out["error"] = error }
     if let model { out["model"] = model }
+    if let best = dish.first {
+      out["dish"] = ["label": best.0, "confidence": best.1, "alternatives": dish.dropFirst().map(\.0)] as [String: Any]
+    }
+    if let saved { out["saved"] = saved }
+    out["savedCount"] = savedCount
     out["items"] = items.map { item -> [String: Any] in
       ["label": item.label, "category": item.category, "confidence": item.confidence,
        "color": Self.palette[item.colorIndex % Self.palette.count].1, "points": item.points.count,
@@ -101,9 +112,10 @@ extension TareCaptureView {
     let generation = demo.generation, context = demo.ciContext
     let surfaceHeightM = Numerics.percentile(demo.spots.map(\.surfaceHeightM), 0.5) ?? PipelineConfig.Probe().fallbackSurfaceHeightM
 
-    func finish(_ result: Result<[FoodItem], Error>) {
+    func finish(_ result: Result<[FoodItem], Error>, dish: [(String, Double)] = [], saved: String? = nil) {
       DispatchQueue.main.async { [weak self] in
         guard let self, generation == self.demo.generation else { return }
+        self.demo.food.dish = dish; self.demo.food.saved = saved; self.demo.food.savedCount = FoodScanLog.count
         switch result {
         case .success(let items):
           self.demo.food.phase = .done; self.demo.food.items = items
@@ -138,14 +150,17 @@ extension TareCaptureView {
           return finish(.failure(RimTapException("The plate is not inside the overhead photo.")))
         }
         do {
-          let results = try classifier.identify(image, interior: interior, ring: ring, context: context)
-          let items = results.enumerated().compactMap { index, result -> FoodItem? in
+          let scan = try classifier.identify(image, interior: interior, ring: ring, context: context)
+          let saved = FoodScanLog.save(frameJPEG: photo.jpeg, plate: image, scan: scan, info: [
+            "model": "FoodClassifier \(classifier.version)", "tiltDeg": photo.tiltDeg,
+            "rimDiameterMm": rim.radiusM * 2000, "surfaceHeightMm": surfaceHeightM * 1000])
+          let items = scan.items.enumerated().compactMap { index, result -> FoodItem? in
             let points = result.points.compactMap { lift($0, crop) }
             guard !points.isEmpty else { return nil }
             return FoodItem(label: result.label, category: result.category, confidence: result.confidence, colorIndex: index,
                             points: points, alternatives: result.topK.dropFirst().map(\.0))
           }
-          finish(.success(items))
+          finish(.success(items), dish: scan.dish, saved: saved)
         } catch {
           finish(.failure(error))
         }

@@ -70,8 +70,10 @@ def export(root: Path, assets: Path, name: str = "FoodClassifier") -> Path:
         if compiled.exists():
             shutil.rmtree(compiled)
         shutil.move(str(Path(tmp) / f"{name}.mlmodelc"), compiled)
+    # Food-101 classes name whole dishes; the app classifies the whole plate against these.
+    dishes = sorted({r["label"] for r in read_manifest(root) if r["source"] == "food101"} & set(labels))
     (assets / f"{name}.labels.json").write_text(json.dumps(
-        {"labels": labels, "categories": categories, "version": mlmodel.version,
+        {"labels": labels, "categories": categories, "dishes": dishes, "version": mlmodel.version,
          "val": history[-1]["val"] if history else None}, indent=1))
     print(f"wrote {compiled}")
     return compiled
