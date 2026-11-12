@@ -1,0 +1,8 @@
+# Auto-labeling pipeline (python -m autolabel). Python 3.11+.
+anthropic>=2.3
+numpy>=1.26
+pillow>=10.0
+
+# Masks (segment stage with --segmenter sam). Skip for boxes-only datasets.
+torch>=2.2
+transformers>=4.45

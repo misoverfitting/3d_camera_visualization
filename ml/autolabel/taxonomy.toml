@@ -1,0 +1,65 @@
+# Food classes the auto-labeler may assign (tare_impl.md Q1 is still open: this is a
+# starter closed set, not a product decision). Labelers also return a free-text label,
+# so items can be re-mapped later without re-labeling images. Anything that fits no
+# class is "other_food".
+#
+# Changing this file changes the label prompt: bump `version` and re-run `label`.
+version = "starter-2026-10-28"
+
+# tare_impl.md Q3 (open): sauces are separate items by default (§6.10).
+sauce_policy = "separate"
+
+[protein]
+classes = [
+  "beef_steak", "ground_beef", "beef_stew", "pork_chop", "pork_belly", "ham", "bacon", "sausage",
+  "chicken_breast", "chicken_thigh", "chicken_wings", "fried_chicken", "roast_chicken", "turkey",
+  "lamb", "meatballs", "burger_patty", "salmon", "white_fish", "tuna", "shrimp", "shellfish",
+  "fried_egg", "scrambled_eggs", "boiled_egg", "omelette", "tofu", "tempeh", "beans", "lentils",
+  "chickpeas", "hummus",
+]
+
+[starch]
+classes = [
+  "white_rice", "brown_rice", "fried_rice", "rice_dish", "pasta", "noodles", "spaghetti",
+  "mashed_potatoes", "roast_potatoes", "french_fries", "baked_potato", "sweet_potato", "bread",
+  "toast", "bun", "tortilla", "flatbread", "pancakes", "waffles", "oatmeal", "cereal", "quinoa",
+  "couscous", "corn", "dumplings", "pizza", "sandwich", "burrito", "taco", "sushi",
+]
+
+[vegetable]
+classes = [
+  "broccoli", "cauliflower", "green_beans", "peas", "carrots", "spinach", "leafy_salad", "kale",
+  "cabbage", "brussels_sprouts", "asparagus", "zucchini", "eggplant", "bell_pepper", "tomato",
+  "cucumber", "onion", "mushrooms", "avocado", "mixed_vegetables", "stir_fried_vegetables",
+  "coleslaw",
+]
+
+[fruit]
+classes = [
+  "apple", "banana", "orange", "grapes", "berries", "strawberries", "melon", "pineapple", "mango",
+  "peach", "pear", "mixed_fruit", "dried_fruit",
+]
+
+[dairy]
+classes = ["cheese", "yogurt", "cottage_cheese", "butter", "cream", "milk"]
+
+[sauce]
+classes = [
+  "tomato_sauce", "gravy", "curry_sauce", "salad_dressing", "ketchup", "mayonnaise", "mustard",
+  "soy_sauce", "salsa", "guacamole", "pesto", "cream_sauce", "dip", "syrup", "jam", "nut_butter",
+]
+
+[mixed]
+classes = ["soup", "stew", "curry", "casserole", "stir_fry", "salad_bowl", "grain_bowl", "lasagna", "quiche"]
+
+[snack]
+classes = ["nuts", "chips", "crackers", "granola_bar", "popcorn", "pretzels"]
+
+[dessert]
+classes = ["cake", "cookie", "brownie", "pie", "ice_cream", "pudding", "pastry", "donut", "chocolate", "muffin"]
+
+[drink]
+classes = ["coffee", "tea", "juice", "smoothie", "soda", "water"]
+
+[other]
+classes = ["other_food"]

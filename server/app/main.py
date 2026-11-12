@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, jobs, sessions
 from . import native_import
+from .food_vision import router as food_router
 from .models import JobProgress, ReconstructRequest, ScaleCalibration, SessionCreate, SessionInfo
 from .pipeline import colmap_pipeline, scale, splat_pipeline, video_extract
 
@@ -25,6 +26,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(food_router)
 
 
 @app.post('/api/recordings', response_model=SessionInfo)
