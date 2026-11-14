@@ -79,29 +79,38 @@ The native pod is named `TareCaptureNative` to avoid colliding with the app's
 
 ## First cloud build and TestFlight
 
-Authenticate in the CLI/browser directly; do not put credentials in source files.
-Before the first build, select a bundle identifier you own in `app.json` (the
-current `com.tare.capture` is an initial value and may not be available).
+For each iterative iPhone update, run from `mobile/`:
 
 ```powershell
-npx eas-cli@latest login
-npx eas-cli@latest init
-npx eas-cli@latest build --platform ios --profile production
-npx eas-cli@latest submit --platform ios --profile production --latest
+npm run testflight
 ```
 
-`eas init` connects the app to your Expo project and writes its project ID. Let
-EAS guide you through your Apple Developer team and signing credentials. Create
-or select the matching App Store Connect app when prompted; configure its Apple
-app ID for submission if requested. Build service charges may depend on the plan.
-Install TestFlight from the App Store, add yourself as an internal tester in App
-Store Connect, and install the processed build. Internal testers need eligible
-App Store Connect roles; external testers follow Apple's beta review process.
-The app bundles its JS and does not need a development server to run.
+This runs `eas build --platform ios --profile production --auto-submit`.
+Production explicitly uses store distribution, remote auto-incrementing build
+numbers and the existing bundle identifier `com.tare.capture`. Submission targets
+the existing App Store Connect app `6824637632`, so new builds belong to the same
+TestFlight app instead of creating another app. Do not change the bundle identifier
+or run `eas init` for routine updates.
 
-The `preview` profile is an alternative ad hoc build requiring registered device
-provisioning and Developer Mode. Production/TestFlight is the intended first path.
-Build/signing/submission have not been executed from this checkout.
+If needed, run `npx eas-cli@latest login` first and complete Apple's credential
+prompts in your terminal. After Apple's processing completes, open TestFlight,
+select Tare Capture, and choose Update (or Install if it is not installed).
+In App Store Connect, enable automatic distribution on the internal tester group
+to receive new eligible builds automatically, or add each new build to that group.
+External tester groups may require beta review. Submission uploads to TestFlight;
+it does not publish the app on the public App Store. No Metro server is needed.
+
+If an existing **production/store** build finished but was not submitted:
+
+```powershell
+npx eas-cli@latest submit --platform ios --profile production
+```
+
+Choose the intended store build interactively. An ad hoc preview binary cannot
+be submitted to TestFlight; create a production build using `npm run testflight`.
+
+The `preview` profile remains an alternative ad hoc build requiring registered
+device provisioning. Its installation links do not create TestFlight updates.
 
 ## Device acceptance check
 

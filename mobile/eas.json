@@ -16,6 +16,10 @@
       "autoIncrement": true,
       "ios": {
         "scheme": "TareCapture"
+      },
+      "distribution": "store",
+      "env": {
+        "TARE_BUNDLE_ID": "com.tare.capture"
       }
     }
   },
