@@ -23,8 +23,22 @@ public struct OrbitSelector {
     Double(cells.count) / Double(config.azimuthBins * (config.elevationBandsDeg.count - 1))
   }
 
+  public var isFull: Bool { directions.count >= min(config.maxKeyframes, config.azimuthBins * (config.elevationBandsDeg.count - 1)) }
+
+  /// Occupied cells per elevation band, from low to high.
+  public var coveredCellsByBand: [Int] {
+    (0..<(config.elevationBandsDeg.count - 1)).map { band in
+      cells.filter { $0 / config.azimuthBins == band }.count
+    }
+  }
+
+  public var hasEnoughViews: Bool {
+    coverage >= config.targetCoverage && coveredCellsByBand.allSatisfy { $0 >= config.minCellsPerBand }
+  }
+
   /// `angularSpeedDegS` and `speedMS` come from consecutive tracking poses.
   public mutating func consider(_ keyframe: Keyframe, angularSpeedDegS: Double, speedMS: Double) -> Rejection? {
+    guard !isFull else { return .full }
     guard keyframe.tracking == .normal else { return .trackingLimited }
     guard angularSpeedDegS <= config.maxAngularSpeedDegS, speedMS <= config.maxSpeedMS else { return .moving }
     let k = keyframe.intrinsics
@@ -37,11 +51,13 @@ public struct OrbitSelector {
     let direction = offset / distanceM
     let elevationDeg = asin(min(1, max(-1, simd_dot(direction, tablePlane.normalWorld)))) * 180 / .pi
     guard elevationDeg >= config.minElevationDeg else { return .tooLow }
+    let candidateCell = cell(direction, elevationDeg: elevationDeg)
+    // Keep one usable frame per cell; local sweeps cannot spend the orbit budget.
+    guard !cells.contains(candidateCell) else { return .redundant }
     let minCos = cos(config.minAngleDeg * .pi / 180)
     guard !directions.contains(where: { simd_dot($0, direction) > minCos }) else { return .redundant }
-    guard directions.count < config.maxKeyframes else { return .full }
     directions.append(direction)
-    cells.insert(cell(direction, elevationDeg: elevationDeg))
+    cells.insert(candidateCell)
     return nil
   }
 

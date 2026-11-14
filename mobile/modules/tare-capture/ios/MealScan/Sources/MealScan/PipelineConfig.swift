@@ -72,6 +72,10 @@ public struct PipelineConfig: Sendable {
     public var maxDistanceM = 1.0
     /// The dish must project inside this centered fraction of the image. Source: initial guess.
     public var maxCenterOffsetFraction = 0.8
+    /// Completion targets. Source: initial guess; validate against physical-device rim fits.
+    public var targetCoverage = 0.6
+    public var minCellsPerBand = 4
+    public var minRimSupport = 0.3
     /// Coverage grid over the hemisphere: azimuth bins x elevation bands (degrees). Source: initial guess.
     public var azimuthBins = 12
     public var elevationBandsDeg: [Double] = [15, 45, 90]

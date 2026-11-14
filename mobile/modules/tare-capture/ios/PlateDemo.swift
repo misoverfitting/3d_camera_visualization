@@ -21,6 +21,9 @@ final class PlateDemo {
   var selector: OrbitSelector?
   var views: [EdgeView] = []
   var building = 0
+  var finishRequested = false
+  var imageBuildFailures = 0
+  var rejectionCounts: [String: Int] = [:]
   var lastPose: simd_float4x4?
   var lastConsidered: TimeInterval = 0
   var hint: String?
@@ -50,12 +53,18 @@ final class PlateDemo {
     stage = .idle; table = nil; taps = []; selector = nil; views = []; lastPose = nil; hint = nil
     fit = nil; fitError = nil; spots = []; lidar = nil; fittedViews = 0; finalPending = false; generation += 1
     photo = nil; food = FoodState(); probe.stop()
+    building = 0; finishRequested = false; imageBuildFailures = 0; rejectionCounts = [:]
+    lastConsidered = 0; fitting = false
     node.childNodes.forEach { $0.removeFromParentNode() }
   }
 
   var status: [String: Any] {
     var out: [String: Any] = ["stage": stage.rawValue, "views": views.count, "taps": taps.count,
                               "coverage": selector?.coverage ?? 0, "fitting": fitting, "spots": spots.count]
+    out["coveredCellsByBand"] = selector?.coveredCellsByBand ?? []
+    out["rejections"] = rejectionCounts
+    out["imageBuildFailures"] = imageBuildFailures
+    out["building"] = building
     if let hint { out["hint"] = hint }
     if let fitError { out["fitError"] = fitError }
     if let rim = fit?.rim {
@@ -122,6 +131,9 @@ extension TareCaptureView {
 
   func demoFinish() {
     guard demo.stage == .capturing else { return }
+    // Include the last reserved view in the final fit, even if Finish was tapped while building.
+    guard demo.building == 0 else { demo.finishRequested = true; return }
+    demo.finishRequested = false
     demo.stage = .done
     runDemoFit(final: true)
   }
@@ -149,19 +161,21 @@ extension TareCaptureView {
     let angularSpeed = Double(rotation.angle) * 180 / .pi / dt
     let speed = Double(simd_distance(previous.columns.3.xyz, pose.columns.3.xyz)) / dt
 
-    var keyframe = Keyframe(frame: frame, id: demo.views.count + demo.building, includeDepth: false)
+    // At most one reservation. Pose sampling above still runs while the worker is busy.
+    guard demo.building == 0, !demo.finishRequested else { return }
+    var keyframe = Keyframe(frame: frame, id: demo.views.count, includeDepth: false)
     keyframe.intrinsics = keyframe.intrinsics.scaled(toWidthPx: PlateDemo.fitWidthPx, heightPx: PlateDemo.fitHeightPx)
     if let rejection = selector.consider(keyframe, angularSpeedDegS: angularSpeed, speedMS: speed) {
       demo.hint = rejection.rawValue
+      demo.rejectionCounts[rejection.rawValue, default: 0] += 1
       if rejection == .full { demoFinish() }
       return
     }
-    demo.selector = selector; demo.hint = nil
+    demo.hint = nil
     // Depth on every other keyframe: enough for spot heights and the LiDAR check.
     if keyframe.id % 2 == 0, let depth = frame.smoothedSceneDepth ?? frame.sceneDepth {
       keyframe.depth = DepthFrame(depth, imageIntrinsics: CameraIntrinsics(frame.camera), worldFromCamera: keyframe.worldFromCamera)
     }
-    considerFoodPhoto(frame, pose: keyframe.worldFromCamera)
     demo.building += 1
     let buffer = frame.capturedImage, generation = demo.generation
     demo.queue.async { [weak self] in
@@ -169,9 +183,18 @@ extension TareCaptureView {
       DispatchQueue.main.async {
         guard let self, generation == self.demo.generation else { return }
         self.demo.building -= 1
-        guard let image else { return }
+        guard let image else {
+          self.demo.imageBuildFailures += 1
+          self.demo.hint = "imageBuildFailed"
+          if self.demo.finishRequested { self.demoFinish() }
+          return
+        }
+        // Commit the tentative selector only after its image exists.
+        self.demo.selector = selector
         self.demo.views.append(EdgeView(keyframe: keyframe, image: image))
-        if selector.coverage >= 0.6 && self.demo.views.count >= 18 { self.demoFinish() } else { self.runDemoFit(final: false) }
+        self.considerFoodPhoto(frame, pose: keyframe.worldFromCamera)
+        if self.demo.finishRequested || selector.isFull { self.demoFinish() }
+        else { self.runDemoFit(final: false) }
       }
     }
   }
@@ -182,6 +205,7 @@ extension TareCaptureView {
     if requested { demo.finalPending = true }
     guard !demo.fitting, let table = demo.table, let seed = demo.seed else { return }
     let views = demo.views, final = demo.finalPending
+    let selectorSnapshot = demo.selector
     guard final || (views.count >= 6 && views.count - demo.fittedViews >= 3) else { return }
     demo.finalPending = false
     demo.fitting = true; demo.fittedViews = views.count
@@ -209,6 +233,14 @@ extension TareCaptureView {
           self.emit(final ? (rim == nil ? "Could not find the rim. Restart and orbit more slowly." : "Done. Probe spots are on the plate.")
                           : "Keep circling the plate.")
           if self.demo.finalPending { self.runDemoFit(final: true) }
+          else if !final, self.demo.stage == .capturing,
+                  let selector = selectorSnapshot, selector.hasEnoughViews,
+                  case .success(let fit) = result, fit.edgeSupport >= selector.config.minRimSupport {
+            self.demoFinish()
+          } else if !final, self.demo.stage == .capturing {
+            // Views may have arrived while fitting. Do not wait for another accepted cell to refit.
+            self.runDemoFit(final: false)
+          }
         }
       }
     }
@@ -222,13 +254,19 @@ extension TareCaptureView {
                          : "Tap the middle of the plate to start."
     case .capturing:
       let covered = "\(Int((demo.selector?.coverage ?? 0) * 100))% covered"
+      if demo.hint == "imageBuildFailed" { return "Could not read the camera image. Try again or restart the scan. \(covered)" }
       switch demo.hint.flatMap(OrbitSelector.Rejection.init(rawValue:)) {
       case .moving: return "Slow down. \(covered)"
       case .outOfFrame: return "Keep the plate in the middle of the screen. \(covered)"
       case .tooLow: return "Raise the phone a little. \(covered)"
-      case .distance: return "Stay 20–60 cm from the plate. \(covered)"
+      case .distance: return "Stay 15\u{2013}100 cm from the plate. \(covered)"
       case .trackingLimited: return "Tracking is limited. Move slowly. \(covered)"
-      default: return "Circle the plate: high above, then lower at the sides. \(covered)"
+      default:
+        let bands = demo.selector?.coveredCellsByBand ?? [0, 0]
+        if let low = bands.first, let high = bands.last, low < high {
+          return "Lower the phone below 45 degrees and move around the plate, keeping it centered. \(covered)"
+        }
+        return "Move around the plate from above to cover new sides; turning the phone in place adds no coverage. \(covered)"
       }
     case .done:
       if demo.fitting || demo.finalPending { return "Finding the rim…" }

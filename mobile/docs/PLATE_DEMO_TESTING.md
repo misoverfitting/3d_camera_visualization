@@ -1,5 +1,28 @@
 # Testing the plate demo
 
+## Coverage regression checks (performance branch)
+
+The UI still calls progress coverage. Each occupied cell now keeps one successfully
+built image. Automatic completion requires at least 60% coverage, at least four cells
+in each elevation band, and a rim fit with edge support at least 0.3. These support
+and diversity thresholds are initial values to validate on a physical phone.
+
+- Orbit only from above 45 degrees: coverage should stop at or below 50%, with guidance
+  to lower the phone and move around the plate. Turning in place should not add coverage.
+- Sweep the same side repeatedly: views should not increase for already occupied cells.
+  Move to a new side and confirm coverage resumes, then include lower views (15–45 degrees).
+- Complete a mixed-elevation orbit: a supported fit should finish automatically without
+  waiting for 18 images. A weak fit should continue collecting missing viewpoints.
+- Tap Finish while an image is being built: the final fit must include that image if
+  conversion succeeds. Reset during capture/fitting and confirm old callbacks do not
+  change the new scan's state.
+- Inspect native status: `coveredCellsByBand` is low-to-high, `rejections` counts selector
+  rejection reasons, and `imageBuildFailures` reports unusable camera buffers. A failed
+  build must leave coverage and the committed view count unchanged.
+- On a Mac, run `swift test` from `mobile/modules/tare-capture/ios/MealScan`; the orbit
+  regressions cover repeated cells, high-only capture, band boundaries, capacity and
+  discarded image reservations. ARKit callback/reset/Finish checks require the phone.
+
 How to build, run and check the plate demo on `feat/plate-demo`:
 - tap a plate and circle it;
 - the rim is found automatically;
