@@ -132,6 +132,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private let tracker = TareFeatureTracker(downscale: 2)
   private let cloudNode = SCNNode()
   private var depthMode: DepthMode = DepthMode.lidarSupported ? .lidar : .multiView
+  // Cross-file capture extensions can inspect the source without changing it.
+  var usesMeasuredSurfaceDepth: Bool { depthMode == .lidar }
   private var depthBusy = false
   private var depthGeneration = 0 // Bumped on every clear so in-flight results cannot repaint old points.
   private var trackerStale = false

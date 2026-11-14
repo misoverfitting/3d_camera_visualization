@@ -256,7 +256,7 @@ extension TareCaptureView {
     let generation = demo.generation
     // Unverified multi-view feature points can float above the dish. Use only
     // repeatedly observed LiDAR points for surface heights; non-LiDAR uses the plane.
-    let useMeasuredSurface = depthMode == .lidar
+    let useMeasuredSurface = usesMeasuredSurfaceDepth
     let cloudSnapshot = { [cloud] in cloud.points(minCount: 3) }
     demo.fitQueue.async { [weak self, depthQueue] in
       let result = EdgeRimFitter().fit(views, tablePlane: table, seedWorld: seed)
