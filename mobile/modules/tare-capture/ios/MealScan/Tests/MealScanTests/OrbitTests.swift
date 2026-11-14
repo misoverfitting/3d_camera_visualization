@@ -129,10 +129,16 @@ final class OrbitTests: XCTestCase {
     var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
     XCTAssertNil(selector.consider(orbitView(azimuth: 5, elevation: 20), angularSpeedDegS: 0, speedMS: 0))
     // More than 8 degrees away, but still the same cell.
-    XCTAssertEqual(selector.consider(orbitView(azimuth: 20, elevation: 20), angularSpeedDegS: 0, speedMS: 0), .redundant)
+    var refresh = selector
+    XCTAssertNil(refresh.consider(orbitView(azimuth: 20, elevation: 20), angularSpeedDegS: 0, speedMS: 0))
+    XCTAssertEqual(refresh.replacementIndex, 0)
+    XCTAssertEqual(refresh.coverage, selector.coverage)
+    XCTAssertEqual(refresh.directions.count, 1)
+    // Discard a refresh when its image is not sharper, as the capture layer does.
     XCTAssertEqual(selector.directions.count, 1)
     for _ in 0..<40 {
-      _ = selector.consider(orbitView(azimuth: 20, elevation: 30), angularSpeedDegS: 0, speedMS: 0)
+      refresh = selector
+      _ = refresh.consider(orbitView(azimuth: 20, elevation: 30), angularSpeedDegS: 0, speedMS: 0)
     }
     XCTAssertEqual(selector.directions.count, 1)
     XCTAssertNil(selector.consider(orbitView(azimuth: 50, elevation: 30), angularSpeedDegS: 0, speedMS: 0))

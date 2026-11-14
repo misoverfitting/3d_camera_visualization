@@ -1,9 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, ImageBackground, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import RimTest from './RimTest';
+import { useFonts } from 'expo-font';
+import { StatusBar } from 'expo-status-bar';
+import { brand, Button, TareLogo } from './Brand';
 
-type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
+type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; coveredCellsByBand?: number[]; coverageCells?: boolean[][]; imageBuildFailures?: number; fitReady?: boolean; rejections?: Record<string, number>; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
 type FoodSource = 'on-device' | 'claude';
 type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; source?: FoodSource; model?: string; dish?: { label: string; confidence: number; alternatives: string[] }; saved?: string; savedCount?: number; items: { label: string; category: string; confidence: number; color: string; points: number; alternatives?: string[] }[] };
 type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
@@ -11,9 +14,13 @@ type CaptureProps = { style: object; recording: boolean; regionSize: number; cap
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
 const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(source: FoodSource): Promise<Food>; demoProbe(): Promise<void>; shareFoodScans(): Promise<void> }>('TareCapture');
 type Mode = 'demo' | 'rim' | 'scan';
-const MODES: [Mode, string][] = [['demo', 'Plate demo'], ['rim', 'Rim taps'], ['scan', 'Scan']];
+const MODES: [Mode, string][] = [['demo', 'Plate scan'], ['rim', 'Rim test'], ['scan', '3D capture']];
 
 export default function App() {
+  const [fontsLoaded, fontError] = useFonts({
+    InstrumentSans: require('./assets/brand/InstrumentSans.ttf'),
+    SometypeMono: require('./assets/brand/SometypeMono.ttf'),
+  });
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<Status>({ message: 'Allow camera access, then tap the object to place a scan box.' });
   const [path, setPath] = useState<string>();
@@ -28,18 +35,32 @@ export default function App() {
     capture.latestRecording().then(saved => { if (saved) setPath(saved); })
       .catch(error => setStatus({ message: `Could not load saved recordings: ${error}` }));
   }, []);
+  if (!fontsLoaded && !fontError) return <SafeAreaView style={styles.page}><View style={styles.loading}><TareLogo /></View></SafeAreaView>;
   return <SafeAreaView style={styles.page}>
-    <Text style={styles.title}>Tare Capture{status.build ? ` · Build ${status.build}` : ''}</Text>
-    <View style={styles.row}>
-      {MODES.map(([value, label]) => <Button key={value} title={mode === value ? `• ${label}` : label} disabled={recording || status.saving} onPress={() => setMode(value)} />)}
+    <StatusBar style="dark" />
+    <View style={styles.topLine} />
+    <ImageBackground source={require('./assets/brand/plate-horizon-glow-2.jpg')} imageStyle={{ opacity: 0.18 }} style={styles.header}>
+      <TareLogo />
+      <Text style={styles.eyebrow}>CAPTURE / 02{status.build ? `  ·  BUILD ${status.build}` : ''}</Text>
+    </ImageBackground>
+    <View style={styles.tabs}>
+      {MODES.map(([value, label]) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: mode === value, disabled: recording || !!status.saving }}
+        disabled={recording || status.saving} onPress={() => setMode(value)} style={[styles.tab, mode === value && styles.activeTab, (recording || status.saving) && { opacity: 0.4 }]}>
+        <Text style={[styles.tabLabel, mode === value && styles.activeTabLabel]}>{label}</Text>
+      </Pressable>)}
     </View>
+    <View style={styles.cameraFrame}>
     <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} forceMultiView={forceMultiView} demoMode={mode === 'demo'} onStatus={({ nativeEvent: e }) => {
       setStatus(e);
       if (e.region !== undefined) setRegion(e.region);
       if (e.recording !== undefined) setRecording(e.recording);
       if (e.path) setPath(e.path);
     }} />
-    <Text style={mode === 'demo' ? styles.headline : styles.copy}>{status.message}</Text>
+    <View pointerEvents="none" style={styles.cameraTag}><View style={styles.liveDot} /><Text style={styles.cameraTagText}>LIVE / {status.tracking === 'normal' ? 'READY' : 'FINDING SURFACE'}</Text></View>
+    </View>
+    <ScrollView style={styles.controls} contentContainerStyle={styles.controlsContent} keyboardShouldPersistTaps="handled">
+    <Text style={styles.eyebrow}>{mode === 'demo' ? '01 / FIND YOUR PLATE' : mode === 'rim' ? '02 / CHECK THE RIM' : '03 / RECORD A CAPTURE'}</Text>
+    <Text accessibilityLiveRegion="polite" style={styles.headline}>{status.message}</Text>
     {mode === 'demo' ? <DemoPanel demo={status.demo} lidar={status.depthMode === 'lidar'} /> : null}
     {mode === 'rim' ? <RimTest disabled={status.tracking !== 'normal'} /> : null}
     {mode === 'scan' ? <>
@@ -51,7 +72,7 @@ export default function App() {
     <Button title="Restart surface detection" disabled={recording || status.saving} onPress={() => setResetToken(value => value + 1)} />
     <View style={styles.row}>
       <Button title="Smaller box" disabled={recording} onPress={() => setSize(Math.max(0.25, size - 0.25))} />
-      <Text>{size.toFixed(2)} m</Text>
+      <Text style={styles.copy}>{size.toFixed(2)} m</Text>
       <Button title="Larger box" disabled={recording} onPress={() => setSize(Math.min(3, size + 0.25))} />
     </View>
     <Button title={captureWithoutBox ? 'Require scan box' : 'Skip box — capture images and poses'} disabled={recording} onPress={() => setCaptureWithoutBox(!captureWithoutBox)} />
@@ -65,6 +86,11 @@ export default function App() {
     }} />
     <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB, poses and a fused point cloud (points.ply). Exports stay on this phone until you share them.</Text>
     </> : null}
+    </ScrollView>
+    {mode === 'demo' ? <View style={styles.actionDock}>
+      <View style={{ flex: 1 }}><Button primary title="Finish scan" disabled={status.demo?.stage !== 'capturing' || (status.demo?.views ?? 0) < 6} onPress={() => capture.demoFinish()} /></View>
+      <View style={{ flex: 1 }}><Button title="Restart" disabled={!status.demo || status.demo.stage === 'idle'} onPress={() => capture.demoReset()} /></View>
+    </View> : null}
   </SafeAreaView>;
 }
 
@@ -72,64 +98,88 @@ export default function App() {
 const identifyThenProbe = (source: FoodSource) => { capture.demoIdentify(source).catch(() => {}).then(() => capture.demoProbe()); };
 
 function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
-  // Once per finished scan: identify the food as soon as the rim and photo are ready, then
-  // run the probe simulation on its points (or on the ring spots if identification fails).
-  const asked = useRef(false);
-  // Food ID runs on the phone (PlateItems + the bundled Core ML classifier); no network.
+  const [approved, setApproved] = useState(false);
+  const [details, setDetails] = useState(false);
   const source: FoodSource = 'on-device';
-  const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting;
+  const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting && !!demo.fitReady;
   const ready = fitted && !!demo?.hasPhoto;
-  useEffect(() => {
-    if (demo?.stage !== 'done') asked.current = false;
-    else if (fitted && !asked.current && demo.food?.phase === 'idle') {
-      asked.current = true;
-      if (ready) identifyThenProbe(source);
-      else capture.demoProbe();
-    }
-  }, [demo?.stage, fitted, ready, demo?.food?.phase]);
+  useEffect(() => { if (demo?.stage !== 'done') setApproved(false); }, [demo?.stage]);
   if (!demo) return null;
   const rim = demo.rim;
   const food = demo.food;
   return <View>
+    {demo.stage !== 'idle' ? <View style={styles.coverageCard}>
+      <View style={styles.row}><Text style={styles.eyebrow}>COVERAGE</Text><Text style={styles.coverageNumber}>{Math.round(demo.coverage * 100)}%</Text></View>
+      <View style={styles.track}><View style={[styles.fill, { width: `${Math.min(100, Math.max(0, demo.coverage * 100))}%` }]} /></View>
+      {[1, 0].map(band => <View key={band} style={styles.cellRow} accessibilityLabel={`${band === 1 ? 'High' : 'Lower'} coverage: ${demo.coveredCellsByBand?.[band] ?? 0} of 12 viewpoints`}><Text style={styles.cellLabel}>{band === 1 ? 'HIGH' : 'LOWER'}</Text>{Array.from({ length: 12 }, (_, cell) => <View key={cell} style={[styles.cell, demo.coverageCells?.[band]?.[cell] && styles.cellCovered]} />)}</View>)}
+      <View style={styles.row}><Text style={styles.small}>HIGH VIEWS  {demo.coveredCellsByBand?.[1] ?? 0}/12</Text><Text style={styles.small}>LOWER VIEWS  {demo.coveredCellsByBand?.[0] ?? 0}/12</Text></View>
+    </View> : null}
+    {demo.stage === 'capturing' ? <Text style={styles.small}>Coverage counts viewpoints around the plate. Orange cells are captured; include high and lower views. Automatic finish needs at least 60% and a supported outline.</Text> : null}
+    {demo.fitError ? <Text style={styles.error}>Plate needs another look: {demo.fitError}. Recenter the plate and try new viewpoints.</Text> : null}
+    {demo.imageBuildFailures ? <Text style={styles.error}>Some camera images could not be read. Restart the scan if coverage stops.</Text> : null}
+    {ready && !approved ? <View style={styles.review}><Text style={styles.headline}>Does the outline follow your plate?</Text><Text style={styles.copy}>Check the entire outer rim before identifying food. If it is off, restart and tap the plate center.</Text><Button primary title="Use this plate & identify food" onPress={() => { setApproved(true); identifyThenProbe(source); }} /></View> : null}
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: details }} onPress={() => setDetails(!details)} style={{ paddingVertical: 12 }}><Text style={styles.small}>{details ? 'HIDE SCAN DETAILS' : 'SHOW SCAN DETAILS'}</Text></Pressable>
+    {details ? <View>
+    <Text style={styles.small}>Last skipped view: {demo.hint ?? 'none'}{demo.rejections ? ` / ${Object.entries(demo.rejections).map(([reason, count]) => `${reason}: ${count}`).join(', ')}` : ''}</Text>
     {demo.stage !== 'idle' ? <Text style={styles.copy}>
-      {demo.views} views · {Math.round(demo.coverage * 100)}% of the hemisphere{demo.taps > 1 ? ` · ${demo.taps} taps` : ''}{demo.fitting ? ' · fitting…' : ''}
+      {demo.views} views · {Math.round(demo.coverage * 100)}% coverage{demo.taps > 1 ? ` · ${demo.taps} taps` : ''}{demo.fitting ? ' · fitting…' : ''}
     </Text> : null}
     {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high{food?.items.length ? '' : ` · ${demo.spots} probe spots 1 in inside`}</Text> : null}
     {demo.lidar && rim ? <Text style={styles.copy}>LiDAR check: Ø {demo.lidar.diameterMm.toFixed(0)} mm ({(rim.diameterMm - demo.lidar.diameterMm >= 0 ? '+' : '')}{(rim.diameterMm - demo.lidar.diameterMm).toFixed(0)} mm) · {demo.lidar.heightMm.toFixed(0)} mm high</Text>
       : demo.stage === 'done' && lidar && rim ? <Text style={styles.copy}>LiDAR check unavailable for this plate.</Text> : null}
+    </View> : null}
     {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food{food.source === 'claude' ? ' with Claude' : ' on the phone'}…</Text> : null}
     {food?.phase === 'done' && food.dish ? <Text style={styles.copy}>Looks like {food.dish.label} ({Math.round(food.dish.confidence * 100)}%){food.dish.alternatives.length ? ` · or ${food.dish.alternatives.join(', ')}` : ''}</Text> : null}
-    {food?.phase === 'done' && food.model ? <Text style={styles.small}>{food.model}{food.saved ? ` · saved scan ${food.saved}` : ''}</Text> : null}
+    {details && food?.phase === 'done' && food.model ? <Text style={styles.small}>{food.model}{food.saved ? ` · saved scan ${food.saved}` : ''}</Text> : null}
     {food?.phase === 'failed' ? <Text style={styles.error}>{food.error}</Text> : null}
     {food?.items.map((item, i) => <View key={i} style={styles.legend}>
       <View style={[styles.swatch, { backgroundColor: item.color }]} />
       <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ` · unsure (${Math.round(item.confidence * 100)}%)` : ''}{item.alternatives?.length && item.confidence < 0.6 ? ` · or ${item.alternatives.join(', ')}` : ''}</Text>
     </View>)}
-    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => identifyThenProbe(source)} /> : null}
+    {ready && approved && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => identifyThenProbe(source)} /> : null}
     {food?.savedCount ? <Button title={`Share food scans (${food.savedCount})`} onPress={() => capture.shareFoodScans().catch(error => Alert.alert('Could not share', String(error)))} /> : null}
     {demo.probe?.running ? <Text style={styles.copy}>Probing {Math.min(demo.probe.done + 1, demo.probe.total)} of {demo.probe.total}…</Text>
-      : fitted && food?.phase !== 'working' ? <Button title={demo.probe?.done ? 'Probe again' : 'Simulate probing'} onPress={() => capture.demoProbe()} /> : null}
+      : fitted && approved && food?.phase !== 'working' ? <Button title={demo.probe?.done ? 'Probe again' : 'Simulate probing'} onPress={() => capture.demoProbe()} /> : null}
     {demo.spots > 0 ? <View style={styles.row}>
       <Button title="Points down 2 mm" onPress={() => capture.demoNudge(-2)} />
-      <Text>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
+      <Text style={styles.copy}>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
       <Button title="Up 2 mm" onPress={() => capture.demoNudge(2)} />
     </View> : null}
-    {demo.stage === 'capturing' ? <Text style={styles.small}>Tap the plate's middle again any time to help it lock on.</Text> : null}
-    <View style={styles.row}>
-      <Button title="Finish now" disabled={demo.stage !== 'capturing' || demo.views < 6} onPress={() => capture.demoFinish()} />
-      <Button title="Restart" disabled={demo.stage === 'idle'} onPress={() => capture.demoReset()} />
-    </View>
+    {demo.stage === 'capturing' ? <Text style={styles.small}>If the outline misses the plate, restart and tap its center.</Text> : null}
   </View>;
 }
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: '#f5f5f5', padding: 16 },
-  title: { fontSize: 24, fontWeight: '600' },
-  copy: { paddingVertical: 6, color: '#333' },
-  small: { paddingVertical: 4, color: '#666' },
-  error: { paddingVertical: 6, color: '#b00020' },
-  legend: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  swatch: { width: 14, height: 14, borderRadius: 7 },
-  headline: { paddingVertical: 8, fontSize: 17, fontWeight: '600', color: '#111' },
-  camera: { flex: 1, minHeight: 180, borderRadius: 12, overflow: 'hidden' },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  page: { flex: 1, backgroundColor: brand.background },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  topLine: { height: 2, backgroundColor: brand.accent },
+  header: { paddingHorizontal: 20, paddingVertical: 18, gap: 12 },
+  eyebrow: { fontFamily: brand.mono, fontSize: 10, letterSpacing: 1, color: brand.body },
+  tabs: { flexDirection: 'row', marginHorizontal: 20, borderBottomWidth: 1, borderColor: brand.line },
+  tab: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderColor: 'transparent' },
+  activeTab: { borderColor: brand.accent },
+  tabLabel: { fontFamily: brand.sans, fontSize: 14, color: brand.muted },
+  activeTabLabel: { color: brand.ink },
+  cameraFrame: { flex: 1, minHeight: 220, marginHorizontal: 20, marginTop: 16, backgroundColor: brand.ink, overflow: 'hidden' },
+  camera: { flex: 1 },
+  cameraTag: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 7, padding: 8, backgroundColor: '#1A1A18CC' },
+  liveDot: { width: 5, height: 5, backgroundColor: brand.accent },
+  cameraTagText: { fontFamily: brand.mono, fontSize: 9, letterSpacing: 0.8, color: '#F1F0ED' },
+  actionDock: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: 8, borderTopWidth: 1, borderColor: brand.line },
+  controls: { flex: 1 }, controlsContent: { padding: 20, paddingBottom: 32 },
+  copy: { paddingVertical: 6, color: brand.body, fontFamily: brand.sans, fontSize: 14, lineHeight: 20, flexShrink: 1 },
+  small: { paddingVertical: 5, color: brand.muted, fontFamily: brand.mono, fontSize: 10, lineHeight: 16, flexShrink: 1 },
+  error: { paddingVertical: 8, color: brand.danger, fontFamily: brand.sans, fontSize: 14, lineHeight: 20 },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 8, borderBottomWidth: 1, borderColor: brand.line },
+  swatch: { width: 7, height: 7 },
+  headline: { paddingVertical: 8, fontSize: 18, lineHeight: 25, fontFamily: brand.sans, color: brand.ink },
+  row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  coverageCard: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: brand.line, paddingVertical: 12, marginVertical: 8 },
+  cellRow: { flexDirection: 'row', gap: 4, alignItems: 'center', marginVertical: 4 },
+  cellLabel: { width: 42, fontFamily: brand.mono, fontSize: 9, color: brand.muted },
+  cell: { flex: 1, height: 8, backgroundColor: brand.line },
+  cellCovered: { backgroundColor: brand.accent },
+  coverageNumber: { fontFamily: brand.mono, fontSize: 25, color: brand.ink },
+  track: { height: 3, backgroundColor: brand.line, marginVertical: 12 },
+  fill: { height: 3, backgroundColor: brand.accent },
+  review: { padding: 14, backgroundColor: brand.panel, borderLeftWidth: 2, borderColor: brand.accent, marginVertical: 10 },
 });

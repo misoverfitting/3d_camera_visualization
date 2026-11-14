@@ -44,7 +44,8 @@ final class PlateDemo {
   let probe = ProbeSim()
   let ciContext = CIContext()
   let node = SCNNode()
-  let queue = DispatchQueue(label: "tare.demo", qos: .userInitiated)
+  let queue = DispatchQueue(label: "tare.demo.images", qos: .userInitiated)
+  let fitQueue = DispatchQueue(label: "tare.demo.fit", qos: .userInitiated)
 
   /// Mean of the taps on the plate, on the table plane.
   var seed: SIMD3<Double>? { taps.isEmpty ? nil : taps.reduce(.zero, +) / Double(taps.count) }
@@ -65,6 +66,8 @@ final class PlateDemo {
     out["rejections"] = rejectionCounts
     out["imageBuildFailures"] = imageBuildFailures
     out["building"] = building
+    out["fitReady"] = fitError == nil && (fit?.edgeSupport ?? 0) >= (selector?.config.minRimSupport ?? 0.3)
+    out["coverageCells"] = selector?.coverageCells ?? []
     if let hint { out["hint"] = hint }
     if let fitError { out["fitError"] = fitError }
     if let rim = fit?.rim {
@@ -73,34 +76,22 @@ final class PlateDemo {
     out["heightOffsetMm"] = 1000 * heightOffsetM
     if let lidar { out["lidar"] = ["diameterMm": 2000 * lidar.radiusM, "heightMm": 1000 * lidar.heightM] }
     out["food"] = food.status
-    out["hasPhoto"] = photo != nil
+    out["hasPhoto"] = photo?.jpeg.isEmpty == false
     out["probe"] = probe.status
     return out
   }
 
-  /// 4x4 box-averaged luma from the camera's Y plane (pixel centers stay consistent with
-  /// `CameraIntrinsics.scaled`).
+  /// Downsample the sensor luma plane without assuming a specific ARKit video format.
   static func grayImage(_ buffer: CVPixelBuffer) -> GrayImage? {
     CVPixelBufferLockBaseAddress(buffer, .readOnly)
     defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
     guard CVPixelBufferGetPlaneCount(buffer) >= 1, let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
     let width = CVPixelBufferGetWidthOfPlane(buffer, 0), height = CVPixelBufferGetHeightOfPlane(buffer, 0)
     let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
-    guard width == fitWidthPx * 4, height == fitHeightPx * 4 else { return nil }
-    let luma = base.assumingMemoryBound(to: UInt8.self)
-    var pixels = [Float](repeating: 0, count: fitWidthPx * fitHeightPx)
-    for y in 0..<fitHeightPx {
-      for x in 0..<fitWidthPx {
-        var sum = 0
-        for dy in 0..<4 {
-          let row = luma + (4 * y + dy) * stride + 4 * x
-          sum += Int(row[0]) + Int(row[1]) + Int(row[2]) + Int(row[3])
-        }
-        pixels[y * fitWidthPx + x] = Float(sum) / 16
-      }
-    }
-    return GrayImage(widthPx: fitWidthPx, heightPx: fitHeightPx, pixels: pixels)
+    return LumaResampler.downsample(UnsafeBufferPointer(start: base.assumingMemoryBound(to: UInt8.self), count: height * stride),
+                                    width: width, height: height, bytesPerRow: stride, targetWidth: fitWidthPx)
   }
+
 }
 
 extension TareCaptureView {
@@ -119,12 +110,15 @@ extension TareCaptureView {
     if demo.stage == .idle {
       let table = (hit.anchor as? ARPlaneAnchor).map(Plane.init) ?? Plane(pointWorld: point, normalWorld: SIMD3(0, 1, 0))
       demo.table = table
-      demo.taps = [point]
-      demo.selector = OrbitSelector(targetWorld: point, tablePlane: table)
+      let seed = point - table.signedDistanceM(point) * table.normalWorld
+      demo.taps = [seed]
+      demo.selector = OrbitSelector(targetWorld: seed, tablePlane: table)
       demo.stage = .capturing
       emit("Plate selected. Circle it slowly, from high above to low at the side.")
     } else if let seed = demo.seed, simd_distance(seed, point) < 0.15 {
-      demo.taps.append(point)
+      // Extra taps must not silently move the fitter away from the coverage target.
+      demo.hint = "recenter"
+      emit("To choose a new plate center, restart the scan and tap its center.")
     }
     drawDemo()
   }
@@ -161,10 +155,12 @@ extension TareCaptureView {
     let angularSpeed = Double(rotation.angle) * 180 / .pi / dt
     let speed = Double(simd_distance(previous.columns.3.xyz, pose.columns.3.xyz)) / dt
 
+    // Select the food image independently: useful overhead shots may share an occupied cell.
+    if angularSpeed <= selector.config.maxAngularSpeedDegS, speed <= selector.config.maxSpeedMS,
+       case .normal = frame.camera.trackingState { considerFoodPhoto(frame, pose: simd_double4x4(pose)) }
     // At most one reservation. Pose sampling above still runs while the worker is busy.
     guard demo.building == 0, !demo.finishRequested else { return }
     var keyframe = Keyframe(frame: frame, id: demo.views.count, includeDepth: false)
-    keyframe.intrinsics = keyframe.intrinsics.scaled(toWidthPx: PlateDemo.fitWidthPx, heightPx: PlateDemo.fitHeightPx)
     if let rejection = selector.consider(keyframe, angularSpeedDegS: angularSpeed, speedMS: speed) {
       demo.hint = rejection.rawValue
       demo.rejectionCounts[rejection.rawValue, default: 0] += 1
@@ -190,9 +186,22 @@ extension TareCaptureView {
           return
         }
         // Commit the tentative selector only after its image exists.
+        var fittedKeyframe = keyframe
+        fittedKeyframe.intrinsics = keyframe.intrinsics.scaled(toWidthPx: image.widthPx, heightPx: image.heightPx)
+        let sharpness = image.sharpness
+        fittedKeyframe.sharpness = sharpness
+        if let index = selector.replacementIndex {
+          // Never replace a sharper image with a blurrier one just to refresh a cell.
+          guard sharpness > (self.demo.views[index].keyframe.sharpness ?? 0) * 1.1 else {
+            if self.demo.finishRequested { self.demoFinish() }
+            return
+          }
+          self.demo.views[index] = EdgeView(keyframe: fittedKeyframe, image: image)
+          self.demo.fittedViews = max(0, self.demo.views.count - 3)
+        } else {
+          self.demo.views.append(EdgeView(keyframe: fittedKeyframe, image: image))
+        }
         self.demo.selector = selector
-        self.demo.views.append(EdgeView(keyframe: keyframe, image: image))
-        self.considerFoodPhoto(frame, pose: keyframe.worldFromCamera)
         if self.demo.finishRequested || selector.isFull { self.demoFinish() }
         else { self.runDemoFit(final: false) }
       }
@@ -206,14 +215,16 @@ extension TareCaptureView {
     guard !demo.fitting, let table = demo.table, let seed = demo.seed else { return }
     let views = demo.views, final = demo.finalPending
     let selectorSnapshot = demo.selector
+    let minSupport = selectorSnapshot?.config.minRimSupport ?? 0.3
     guard final || (views.count >= 6 && views.count - demo.fittedViews >= 3) else { return }
     demo.finalPending = false
     demo.fitting = true; demo.fittedViews = views.count
     let generation = demo.generation
     let cloudSnapshot = { [cloud] in cloud.points(minCount: 1) }
-    demo.queue.async { [weak self, depthQueue] in
+    demo.fitQueue.async { [weak self, depthQueue] in
       let result = EdgeRimFitter().fit(views, tablePlane: table, seedWorld: seed)
       let rim = try? result.get().rim
+      let supported = ((try? result.get().edgeSupport) ?? 0) >= minSupport
       let lidar = final ? rim.flatMap { rim in
         LidarRimReference().estimate(keyframes: views.map(\.keyframe), tablePlane: table,
                                      approximateCenterWorld: rim.centerWorld, searchRadiusM: rim.radiusM * 1.3 + 0.03)
@@ -225,12 +236,15 @@ extension TareCaptureView {
           guard let self, generation == self.demo.generation else { return }
           self.demo.fitting = false
           switch result {
-          case .success(let fit): self.demo.fit = fit; self.demo.fitError = nil; self.demo.spots = spots
+          case .success(let fit):
+            self.demo.fit = fit
+            self.demo.fitError = fit.edgeSupport < (self.demo.selector?.config.minRimSupport ?? 0.3) ? "The rim outline is uncertain" : nil
+            self.demo.spots = spots
           case .failure(let failure): self.demo.fitError = "\(failure)"
           }
           if final { self.demo.lidar = lidar }
           self.drawDemo()
-          self.emit(final ? (rim == nil ? "Could not find the rim. Restart and orbit more slowly." : "Done. Probe spots are on the plate.")
+          self.emit(final ? (supported ? "Check that the outline follows your plate before identifying food." : "Plate outline uncertain. Restart, tap the center and capture new sides.")
                           : "Keep circling the plate.")
           if self.demo.finalPending { self.runDemoFit(final: true) }
           else if !final, self.demo.stage == .capturing,
@@ -254,6 +268,7 @@ extension TareCaptureView {
                          : "Tap the middle of the plate to start."
     case .capturing:
       let covered = "\(Int((demo.selector?.coverage ?? 0) * 100))% covered"
+      if demo.hint == "recenter" { return "Restart to choose a new plate center. \(covered)" }
       if demo.hint == "imageBuildFailed" { return "Could not read the camera image. Try again or restart the scan. \(covered)" }
       switch demo.hint.flatMap(OrbitSelector.Rejection.init(rawValue:)) {
       case .moving: return "Slow down. \(covered)"
@@ -273,7 +288,7 @@ extension TareCaptureView {
       let probe = demo.probe
       if probe.running { return "Probing \(probe.current ?? "the plate") (\(min(probe.done + 1, probe.total)) of \(probe.total))…" }
       if probe.total > 0 && probe.done == probe.total { return "Probed \(probe.total) spot\(probe.total == 1 ? "" : "s")." }
-      return demo.fit == nil ? "Could not find the rim. Restart and circle more slowly." : "Done. Probe spots are on the plate."
+      return demo.fitError != nil || demo.fit == nil ? "Plate outline uncertain. Restart and tap the plate center." : "Check that the outline follows your plate before identifying food."
     }
   }
 
@@ -287,7 +302,8 @@ extension TareCaptureView {
     }
     guard let rim = demo.fit?.rim, let table = demo.table else { return }
     let torus = SCNTorus(ringRadius: CGFloat(rim.radiusM), pipeRadius: 0.0012)
-    torus.materials = [demoMaterial(demo.stage == .done ? .systemGreen : .white)]
+    let supported = (demo.fit?.edgeSupport ?? 0) >= (demo.selector?.config.minRimSupport ?? 0.3)
+    torus.materials = [demoMaterial(supported ? UIColor(red: 1, green: 0.416, blue: 0, alpha: 1) : .systemYellow)]
     let ring = SCNNode(geometry: torus)
     ring.simdPosition = SIMD3<Float>(rim.centerWorld)
     ring.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: SIMD3<Float>(table.normalWorld))

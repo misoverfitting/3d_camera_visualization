@@ -1,5 +1,41 @@
 # Testing the plate demo
 
+## Follow-up for inaccurate outlines / coverage near 54%
+
+- Capture image preparation and rim fitting now run on separate queues. Test that
+  coverage and guidance keep updating while a fit is running.
+- Camera luma is area-resampled at its actual aspect ratio, including 1920×1440,
+  1280×720 and 640×480 inputs. Intrinsics scale to the resulting image dimensions.
+  `LumaResamplerTests` covers row padding, fractional scaling and constant images.
+- An occupied cell can propose a replacement after at least 8 degrees of movement.
+  It commits only when the replacement's Laplacian variance is over 10% higher.
+  The view count and coverage do not increase for replacements. This repairs a
+  poor first image without silently inflating coverage.
+- The food photo is selected independently from occupied cells, only in normal
+  tracking with slow motion. Images must improve overhead tilt by at least two
+  degrees to avoid encoding every tiny change. No ARFrame is retained by a fit job.
+- The initial target is projected onto the support plane. Further taps cannot move
+  only the fitter's seed while leaving the coverage target behind. Restart to recenter.
+- Surface coaching must disappear after plate selection, including estimated-plane
+  starts without a persistent plane anchor.
+- Coverage remains the fraction of the original 24 cells. High/lower counts and
+  occupied-cell strips explain why a high-only orbit cannot reach full coverage.
+  The strips use table-frame azimuth; they are not a phone-relative navigation map.
+- Finish and Restart stay visible. A failed/weak fit is not ready for food ID.
+  For a supported finished fit, the user must select **Use this plate & identify food**
+  after checking the outline. Test a wrong outline: food ID must not start automatically.
+- `preview` builds auto-increment their iOS build number. The header also shows
+  `CAPTURE / 02` to distinguish this UI revision. Rebuild native iOS to test these changes.
+
+Windows validation: TypeScript passed; an iOS JavaScript/assets export passed with
+bytecode disabled for the local packaging check. Default local Hermes export was
+blocked writing its temporary bytecode file by the Windows sandbox. Production
+Hermes remains enabled. Browser layout checks used the actual React components,
+fonts and assets with a camera/native-module stub at 390×844 and 320×568, with no
+browser exceptions. Native Swift tests and on-device capture are not run on Windows.
+The edge-based detector still needs phone validation; these changes do not establish
+that its outline is accurate on every plate.
+
 ## Coverage regression checks (performance branch)
 
 The UI still calls progress coverage. Each occupied cell now keeps one successfully

@@ -71,7 +71,7 @@ extension TareCaptureView {
   func considerFoodPhoto(_ frame: ARFrame, pose: simd_double4x4) {
     let forward = -SIMD3(pose.columns.2.x, pose.columns.2.y, pose.columns.2.z)
     let tilt = acos(min(1, max(-1, simd_dot(simd_normalize(forward), SIMD3(0, -1, 0))))) * 180 / .pi
-    guard tilt < min(45, demo.photo?.tiltDeg ?? 45) else { return }
+    guard tilt < min(45, (demo.photo?.tiltDeg).map { $0 - 2 } ?? 45) else { return }
     let keyframe = Keyframe(frame: frame, id: -1, includeDepth: true)
     let buffer = frame.capturedImage, generation = demo.generation, context = demo.ciContext
     demo.photo = FoodPhoto(keyframe: keyframe, jpeg: Data(), tiltDeg: tilt)  // Claim the slot; JPEG follows.
@@ -92,6 +92,9 @@ extension TareCaptureView {
   func demoIdentify(onDevice: Bool, _ completion: @escaping (Result<[String: Any], Error>) -> Void) {
     guard demo.stage == .done, let rim = demo.fit?.rim, let table = demo.table else {
       return completion(.failure(RimTapException("Finish the plate scan first.")))
+    }
+    guard demo.fitError == nil, (demo.fit?.edgeSupport ?? 0) >= (demo.selector?.config.minRimSupport ?? 0.3) else {
+      return completion(.failure(RimTapException("The plate outline is uncertain. Restart and recapture before identifying food.")))
     }
     guard let photo = demo.photo, !photo.jpeg.isEmpty else {
       return completion(.failure(RimTapException("No overhead photo yet. Restart and include a view from above.")))

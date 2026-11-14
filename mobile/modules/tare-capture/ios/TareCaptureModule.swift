@@ -461,7 +461,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       horizontalPlanes = horizontalIDs.count
       verticalPlanes = planes.filter { $0.alignment == .vertical }.count
       featurePoints = frame.rawFeaturePoints?.points.count ?? 0
-      let needsCoaching = horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
+      let needsCoaching = (!demo.enabled || demo.stage == .idle) && horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
       if coaching.isActive != needsCoaching { coaching.setActive(needsCoaching, animated: true) }
       let message: String
       if demo.enabled { message = demoMessage(tracking: tracking, planes: horizontalPlanes) }
