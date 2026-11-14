@@ -7,16 +7,29 @@ from .. import config
 from ..recording_format import export_colmap
 
 
-def run_known_poses(session, reporter):
+def run_known_poses(session, reporter, options=None):
     import pycolmap as pc
     from .colmap_common import PipelineError, SfmResult
     data = json.loads((session.root / 'arkit.json').read_text(encoding='utf-8'))
     expected = {f['image'] for f in data['frames']}
     if expected != {p.name for p in session.photos_dir.iterdir() if p.is_file()}:
         raise PipelineError('Native images changed; import the original ZIP into a new session')
+    from .reconstruction_options import ReconstructionOptions
+    from .keyframes import select_frames
+    options = options or ReconstructionOptions()
+    data['frames'] = select_frames(data, session.photos_dir, options.max_frames)
+    expected = {f['image'] for f in data['frames']}
+    has_cuda = getattr(pc, 'has_cuda', False)
+    has_cuda = has_cuda() if callable(has_cuda) else has_cuda
+    from . import colmap_common as cc
+    cli_cuda = options.feature_device != 'cpu' and not has_cuda and cc.dense_stereo_available()
+    if options.feature_device == 'cuda' and not has_cuda and not cli_cuda:
+        raise PipelineError('Neither pycolmap nor the configured COLMAP CLI supports CUDA')
+    device = pc.Device.cuda if has_cuda and options.feature_device != 'cpu' else pc.Device.cpu
     work, database = session.work_dir, session.work_dir / 'database.db'
     timings = {}
     stats = {'source': 'arkit_rgb', 'pose_policy': 'fixed', 'coordinate_frame': 'arkit_world_meters',
+             'selected_images': [f['image'] for f in data['frames']], 'feature_device': 'cli_cuda' if cli_cuda else str(device),
              'pycolmap_version': pc.__version__, 'timings_seconds': timings}
     def stage(name, message, percent, operation):
         reporter.update(name, message, percent)
@@ -26,10 +39,21 @@ def run_known_poses(session, reporter):
         finally:
             timings[name] = time.perf_counter() - started
             (session.output_dir / 'sfm.json').write_text(json.dumps(stats, indent=2), encoding='utf-8')
-    stage('feature_extraction', 'Extracting native image features', 5, lambda: pc.extract_features(
-        database, session.photos_dir, image_names=[f['image'] for f in data['frames']],
-        camera_mode=pc.CameraMode.PER_IMAGE, reader_options={'camera_model': 'PINHOLE'},
-        extraction_options={'num_threads': config.COLMAP_NUM_THREADS}, device=pc.Device.cpu))
+    def extract():
+        if cli_cuda:
+            extraction, _ = cc.feature_option_prefixes(config.COLMAP_BIN)
+            names = work / 'image-list.txt'
+            names.write_text('\n'.join(f['image'] for f in data['frames']) + '\n')
+            cc.run([config.COLMAP_BIN, 'feature_extractor', '--database_path', str(database),
+                    '--image_path', str(session.photos_dir), '--image_list_path', str(names),
+                    '--ImageReader.camera_model', 'PINHOLE', '--ImageReader.single_camera_per_image', '1',
+                    f'--{extraction}.use_gpu', '1',
+                    f'--{extraction}.num_threads', str(config.COLMAP_NUM_THREADS)], 'CUDA features')
+        else:
+            pc.extract_features(database, session.photos_dir, image_names=[f['image'] for f in data['frames']],
+                camera_mode=pc.CameraMode.PER_IMAGE, reader_options={'camera_model': 'PINHOLE'},
+                extraction_options={'num_threads': config.COLMAP_NUM_THREADS}, device=device)
+    stage('feature_extraction', 'Extracting native image features', 5, extract)
     with pc.Database.open(database) as db:
         images = {image.name: image for image in db.read_all_images()}
         if set(images) != expected:
@@ -44,9 +68,18 @@ def run_known_poses(session, reporter):
             identities[image.name] = (image.image_id, image.camera_id)
     seed = work / 'known_poses'
     export_colmap(data, seed, identities)
-    stage('matching', 'Matching overlapping native images', 20, lambda: pc.match_sequential(
-        database, pairing_options={'overlap': 15, 'loop_detection': False},
-        matching_options={'num_threads': config.COLMAP_NUM_THREADS}, device=pc.Device.cpu))
+    def match():
+        if cli_cuda:
+            _, matching = cc.feature_option_prefixes(config.COLMAP_BIN)
+            cc.run([config.COLMAP_BIN, 'sequential_matcher', '--database_path', str(database),
+                    f'--{matching}.use_gpu', '1',
+                    f'--{matching}.num_threads', str(config.COLMAP_NUM_THREADS),
+                    '--SequentialMatching.overlap', '15',
+                    '--SequentialMatching.loop_detection', '0'], 'CUDA matching')
+        else:
+            pc.match_sequential(database, pairing_options={'overlap': 15, 'loop_detection': False},
+                matching_options={'num_threads': config.COLMAP_NUM_THREADS}, device=device)
+    stage('matching', 'Matching overlapping native images', 20, match)
     sparse = work / 'triangulated'
     sparse.mkdir()
     model = stage('triangulation', 'Triangulating geometry with fixed ARKit poses', 35,
