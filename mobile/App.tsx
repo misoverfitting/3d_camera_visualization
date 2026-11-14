@@ -1,11 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
+import RimTest from './RimTest';
 
-type Status = { message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string };
-type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; onStatus: (event: { nativeEvent: Status }) => void };
+type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
+type FoodSource = 'on-device' | 'claude';
+type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; source?: FoodSource; model?: string; items: { label: string; category: string; confidence: number; color: string; points: number; alternatives?: string[] }[] };
+type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
+type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; demoMode: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
-const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null> }>('TareCapture');
+const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(source: FoodSource): Promise<Food>; demoProbe(): Promise<void> }>('TareCapture');
+type Mode = 'demo' | 'rim' | 'scan';
+const MODES: [Mode, string][] = [['demo', 'Plate demo'], ['rim', 'Rim taps'], ['scan', 'Scan']];
 
 export default function App() {
   const [recording, setRecording] = useState(false);
@@ -16,23 +22,32 @@ export default function App() {
   const [sharing, setSharing] = useState(false);
   const [captureWithoutBox, setCaptureWithoutBox] = useState(false);
   const [resetToken, setResetToken] = useState(0);
+  const [forceMultiView, setForceMultiView] = useState(false);
+  const [mode, setMode] = useState<Mode>('demo');
   useEffect(() => {
     capture.latestRecording().then(saved => { if (saved) setPath(saved); })
       .catch(error => setStatus({ message: `Could not load saved recordings: ${error}` }));
   }, []);
   return <SafeAreaView style={styles.page}>
     <Text style={styles.title}>Tare Capture{status.build ? ` · Build ${status.build}` : ''}</Text>
-    <Text style={styles.copy}>Look downward and move slowly sideways over a textured table. Tap a cyan surface near the object, or skip the box.</Text>
-    <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} onStatus={({ nativeEvent: e }) => {
+    <View style={styles.row}>
+      {MODES.map(([value, label]) => <Button key={value} title={mode === value ? `• ${label}` : label} disabled={recording || status.saving} onPress={() => setMode(value)} />)}
+    </View>
+    <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} forceMultiView={forceMultiView} demoMode={mode === 'demo'} onStatus={({ nativeEvent: e }) => {
       setStatus(e);
       if (e.region !== undefined) setRegion(e.region);
       if (e.recording !== undefined) setRecording(e.recording);
       if (e.path) setPath(e.path);
     }} />
-    <Text style={styles.copy}>{status.message}</Text>
+    <Text style={mode === 'demo' ? styles.headline : styles.copy}>{status.message}</Text>
+    {mode === 'demo' ? <DemoPanel demo={status.demo} lidar={status.depthMode === 'lidar'} /> : null}
+    {mode === 'rim' ? <RimTest disabled={status.tracking !== 'normal'} /> : null}
+    {mode === 'scan' ? <>
     <Text style={styles.copy}>Tracking: {status.tracking || 'initializing'} · Surfaces: {status.surfaces || 0} · Frames: {status.frames || 0}</Text>
     <Text style={styles.copy}>Walls: {status.walls || 0} · Feature points: {status.points || 0}</Text>
     <Text style={styles.copy}>Surface overlays: {status.overlays || 0} · In view: {status.overlaysInView || 0}</Text>
+    <Text style={styles.copy}>Depth: {status.depthMode === 'lidar' ? 'LiDAR' : 'multi-view (OpenCV)'} · Cloud points: {status.cloudPoints || 0}{status.depthMode === 'multiview' ? ` · Tracks: ${status.tracks || 0}` : ''}</Text>
+    {status.lidarSupported ? <Button title={forceMultiView ? 'Use LiDAR depth' : 'Force multi-view depth (benchmark)'} disabled={recording || status.saving} onPress={() => setForceMultiView(!forceMultiView)} /> : null}
     <Button title="Restart surface detection" disabled={recording || status.saving} onPress={() => setResetToken(value => value + 1)} />
     <View style={styles.row}>
       <Button title="Smaller box" disabled={recording} onPress={() => setSize(Math.max(0.25, size - 0.25))} />
@@ -48,13 +63,71 @@ export default function App() {
       catch (error) { setStatus({ message: String(error) }); }
       finally { setSharing(false); }
     }} />
-    <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB and poses only; no measured depth. Exports stay on this phone until you share them.</Text>
+    <Text style={styles.copy}>Maximum 120 seconds / 240 frames. RGB, poses and a fused point cloud (points.ply). Exports stay on this phone until you share them.</Text>
+    </> : null}
   </SafeAreaView>;
+}
+
+// Errors arrive in the status as food.error; the ring spots are probed instead.
+const identifyThenProbe = (source: FoodSource) => { capture.demoIdentify(source).catch(() => {}).then(() => capture.demoProbe()); };
+
+function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
+  // Once per finished scan: identify the food as soon as the rim and photo are ready, then
+  // run the probe simulation on its points (or on the ring spots if identification fails).
+  const asked = useRef(false);
+  // Food ID runs on the phone (PlateItems + the bundled Core ML classifier); no network.
+  const source: FoodSource = 'on-device';
+  const fitted = demo?.stage === 'done' && !!demo.rim && !demo.fitting;
+  const ready = fitted && !!demo?.hasPhoto;
+  useEffect(() => {
+    if (demo?.stage !== 'done') asked.current = false;
+    else if (fitted && !asked.current && demo.food?.phase === 'idle') {
+      asked.current = true;
+      if (ready) identifyThenProbe(source);
+      else capture.demoProbe();
+    }
+  }, [demo?.stage, fitted, ready, demo?.food?.phase]);
+  if (!demo) return null;
+  const rim = demo.rim;
+  const food = demo.food;
+  return <View>
+    {demo.stage !== 'idle' ? <Text style={styles.copy}>
+      {demo.views} views · {Math.round(demo.coverage * 100)}% of the hemisphere{demo.taps > 1 ? ` · ${demo.taps} taps` : ''}{demo.fitting ? ' · fitting…' : ''}
+    </Text> : null}
+    {rim ? <Text style={styles.copy}>Rim Ø {rim.diameterMm.toFixed(0)} mm · {rim.heightMm.toFixed(0)} mm high{food?.items.length ? '' : ` · ${demo.spots} probe spots 1 in inside`}</Text> : null}
+    {demo.lidar && rim ? <Text style={styles.copy}>LiDAR check: Ø {demo.lidar.diameterMm.toFixed(0)} mm ({(rim.diameterMm - demo.lidar.diameterMm >= 0 ? '+' : '')}{(rim.diameterMm - demo.lidar.diameterMm).toFixed(0)} mm) · {demo.lidar.heightMm.toFixed(0)} mm high</Text>
+      : demo.stage === 'done' && lidar && rim ? <Text style={styles.copy}>LiDAR check unavailable for this plate.</Text> : null}
+    {food?.phase === 'working' ? <Text style={styles.copy}>Identifying the food{food.source === 'claude' ? ' with Claude' : ' on the phone'}…</Text> : null}
+    {food?.phase === 'done' && food.model ? <Text style={styles.small}>{food.model}</Text> : null}
+    {food?.phase === 'failed' ? <Text style={styles.error}>{food.error}</Text> : null}
+    {food?.items.map((item, i) => <View key={i} style={styles.legend}>
+      <View style={[styles.swatch, { backgroundColor: item.color }]} />
+      <Text style={styles.copy}>{item.label} · {item.category} · {item.points} point{item.points === 1 ? '' : 's'}{item.confidence < 0.6 ? ` · unsure (${Math.round(item.confidence * 100)}%)` : ''}{item.alternatives?.length && item.confidence < 0.6 ? ` · or ${item.alternatives.join(', ')}` : ''}</Text>
+    </View>)}
+    {ready && food?.phase !== 'working' ? <Button title={food?.items.length ? 'Identify again' : 'Identify food'} onPress={() => identifyThenProbe(source)} /> : null}
+    {demo.probe?.running ? <Text style={styles.copy}>Probing {Math.min(demo.probe.done + 1, demo.probe.total)} of {demo.probe.total}…</Text>
+      : fitted && food?.phase !== 'working' ? <Button title={demo.probe?.done ? 'Probe again' : 'Simulate probing'} onPress={() => capture.demoProbe()} /> : null}
+    {demo.spots > 0 ? <View style={styles.row}>
+      <Button title="Points down 2 mm" onPress={() => capture.demoNudge(-2)} />
+      <Text>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
+      <Button title="Up 2 mm" onPress={() => capture.demoNudge(2)} />
+    </View> : null}
+    {demo.stage === 'capturing' ? <Text style={styles.small}>Tap the plate's middle again any time to help it lock on.</Text> : null}
+    <View style={styles.row}>
+      <Button title="Finish now" disabled={demo.stage !== 'capturing' || demo.views < 6} onPress={() => capture.demoFinish()} />
+      <Button title="Restart" disabled={demo.stage === 'idle'} onPress={() => capture.demoReset()} />
+    </View>
+  </View>;
 }
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: '#f5f5f5', padding: 16 },
   title: { fontSize: 24, fontWeight: '600' },
   copy: { paddingVertical: 6, color: '#333' },
+  small: { paddingVertical: 4, color: '#666' },
+  error: { paddingVertical: 6, color: '#b00020' },
+  legend: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  swatch: { width: 14, height: 14, borderRadius: 7 },
+  headline: { paddingVertical: 8, fontSize: 17, fontWeight: '600', color: '#111' },
   camera: { flex: 1, minHeight: 180, borderRadius: 12, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 });

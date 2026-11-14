@@ -25,6 +25,33 @@ working local Mac is required for the cloud workflow.
   of silently returning. Skip box permits normally tracked RGB/pose recording
   without waiting for plane detection; in that case `region` is JSON null.
 
+## On-device depth
+
+Both depth sources write into one 5 mm voxel grid in the ARKit world frame, shown
+live over the camera (magenta = LiDAR, green = multi-view) and saved with each
+recording as `points.ply` (binary PLY: x, y, z float meters; per-voxel observation
+count). Points are kept inside the scan box when one is placed.
+
+- **LiDAR** (`depth_mode: "lidar"`): ARKit `smoothedSceneDepth`, high-confidence
+  pixels only, 0.05–1.5 m, sampled at 5 Hz. The live view hides voxels seen once.
+- **Multi-view** (`depth_mode: "multiview"`): used on phones without LiDAR, and on
+  LiDAR phones via *Force multi-view depth (benchmark)*. OpenCV pyramidal
+  Lucas-Kanade tracks corners at 15 Hz on 960 x 720 luma with a forward-backward
+  check. Tracks are triangulated (linear multi-view DLT) from fixed ARKit poses
+  only after at least 6 degrees of parallax and 2 cm of baseline, with every view
+  in front of the camera and under 1 px reprojection error (downscaled pixels).
+  Sparse by design: textureless or glossy food produces few points. Tracking
+  loss resets all tracks.
+
+Scanning the same scene in both modes on one LiDAR phone gives a ground-truth
+comparison for the multi-view path. Neither cloud is yet evaluated against
+measured real objects.
+
+OpenCV 4.14.0 (official iOS framework) is fetched by `scripts/fetch-opencv.sh` on
+`npm install`/`npm ci`, verified by SHA-256, into the module's ignored `vendor/`.
+`native-tests/run_tracker_test.sh` runs the tracker on macOS against a ray-cast
+synthetic scene with known geometry.
+
 Exported ZIPs can now be imported through the web app's Import scan form. The
 server validates the recording, creates a native session, triangulates with fixed
 ARKit poses and feeds the existing mesh/splat backends. Native mesh reconstruction
@@ -110,7 +137,8 @@ match features, use database-assigned IDs, and triangulate those observations.
 column-major matrices, and camera-to-world poses. ARKit camera axes are right/up/
 back (+X/+Y/+Z); the camera looks along -Z. JPEGs remain in sensor orientation;
 intrinsics refer to their full, unrotated resolution. Timestamps use ARFrame's
-monotonic seconds clock, not wall time. No measured depth is included.
+monotonic seconds clock, not wall time. No per-frame depth maps are included;
+`depth_mode` and `point_cloud` describe the fused `points.ply` (world frame).
 
 `frames` contains image path, timestamp, width, height, 3x3 intrinsics, 4x4 pose,
 and tracking state. `region` records bottom-center world origin, cube size in

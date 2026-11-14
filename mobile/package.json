@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "postinstall": "sh scripts/fetch-opencv.sh"
   },
   "dependencies": {
     "expo": "~55.0.0",
