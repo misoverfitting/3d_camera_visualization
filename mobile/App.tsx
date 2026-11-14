@@ -6,13 +6,13 @@ import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { brand, Button, TareLogo } from './Brand';
 
-type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; coveredCellsByBand?: number[]; coverageCells?: boolean[][]; imageBuildFailures?: number; fitReady?: boolean; rejections?: Record<string, number>; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
+type Demo = { stage: 'idle' | 'capturing' | 'done'; views: number; taps: number; coverage: number; tableSet?: boolean; tableOffsetMm?: number; setupStep?: 'table' | 'plate' | 'capture'; coveredCellsByBand?: number[]; coverageCells?: boolean[][]; imageBuildFailures?: number; fitReady?: boolean; rejections?: Record<string, number>; fitting: boolean; spots: number; hint?: string; fitError?: string; rim?: { diameterMm: number; heightMm: number; support: number }; lidar?: { diameterMm: number; heightMm: number }; heightOffsetMm?: number; hasPhoto?: boolean; food?: Food; probe?: { running: boolean; done: number; total: number } };
 type FoodSource = 'on-device' | 'claude';
 type Food = { phase: 'idle' | 'working' | 'done' | 'failed'; error?: string; source?: FoodSource; model?: string; dish?: { label: string; confidence: number; alternatives: string[] }; saved?: string; savedCount?: number; items: { label: string; category: string; confidence: number; color: string; points: number; alternatives?: string[] }[] };
 type Status = { demo?: Demo; message: string; tracking?: string; frames?: number; recording?: boolean; path?: string; region?: boolean; surfaces?: number; walls?: number; points?: number; saving?: boolean; overlays?: number; overlaysInView?: number; build?: string; depthMode?: 'lidar' | 'multiview'; lidarSupported?: boolean; cloudPoints?: number; tracks?: number };
 type CaptureProps = { style: object; recording: boolean; regionSize: number; captureWithoutBox: boolean; resetToken: number; forceMultiView: boolean; demoMode: boolean; onStatus: (event: { nativeEvent: Status }) => void };
 const CaptureView = requireNativeViewManager<CaptureProps>('TareCapture');
-const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoIdentify(source: FoodSource): Promise<Food>; demoProbe(): Promise<void>; shareFoodScans(): Promise<void> }>('TareCapture');
+const capture = requireNativeModule<{ shareRecording(path: string): Promise<void>; latestRecording(): Promise<string | null>; demoFinish(): Promise<void>; demoReset(): Promise<void>; demoNudge(deltaMm: number): Promise<void>; demoAdjustTable(deltaMm: number): Promise<void>; demoIdentify(source: FoodSource): Promise<Food>; demoProbe(): Promise<void>; shareFoodScans(): Promise<void> }>('TareCapture');
 type Mode = 'demo' | 'rim' | 'scan';
 const MODES: [Mode, string][] = [['demo', 'Plate scan'], ['rim', 'Rim test'], ['scan', '3D capture']];
 
@@ -22,7 +22,7 @@ export default function App() {
     SometypeMono: require('./assets/brand/SometypeMono.ttf'),
   });
   const [recording, setRecording] = useState(false);
-  const [status, setStatus] = useState<Status>({ message: 'Allow camera access, then tap the object to place a scan box.' });
+  const [status, setStatus] = useState<Status>({ message: 'Allow camera access, then point at bare table beside the plate.' });
   const [path, setPath] = useState<string>();
   const [region, setRegion] = useState(false);
   const [size, setSize] = useState(1);
@@ -41,7 +41,7 @@ export default function App() {
     <View style={styles.topLine} />
     <ImageBackground source={require('./assets/brand/plate-horizon-glow-2.jpg')} imageStyle={{ opacity: 0.18 }} style={styles.header}>
       <TareLogo />
-      <Text style={styles.eyebrow}>CAPTURE / 02{status.build ? `  ·  BUILD ${status.build}` : ''}</Text>
+      <Text style={styles.eyebrow}>CAPTURE / 03{status.build ? `  ·  BUILD ${status.build}` : ''}</Text>
     </ImageBackground>
     <View style={styles.tabs}>
       {MODES.map(([value, label]) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: mode === value, disabled: recording || !!status.saving }}
@@ -59,7 +59,7 @@ export default function App() {
     <View pointerEvents="none" style={styles.cameraTag}><View style={styles.liveDot} /><Text style={styles.cameraTagText}>LIVE / {status.tracking === 'normal' ? 'READY' : 'FINDING SURFACE'}</Text></View>
     </View>
     <ScrollView style={styles.controls} contentContainerStyle={styles.controlsContent} keyboardShouldPersistTaps="handled">
-    <Text style={styles.eyebrow}>{mode === 'demo' ? '01 / FIND YOUR PLATE' : mode === 'rim' ? '02 / CHECK THE RIM' : '03 / RECORD A CAPTURE'}</Text>
+    <Text style={styles.eyebrow}>{mode === 'demo' ? (status.demo?.setupStep === 'table' ? '01 / SET THE TABLE SURFACE' : status.demo?.setupStep === 'plate' ? '02 / SELECT THE PLATE CENTER' : '03 / CAPTURE YOUR PLATE') : mode === 'rim' ? '02 / CHECK THE RIM' : '03 / RECORD A CAPTURE'}</Text>
     <Text accessibilityLiveRegion="polite" style={styles.headline}>{status.message}</Text>
     {mode === 'demo' ? <DemoPanel demo={status.demo} lidar={status.depthMode === 'lidar'} /> : null}
     {mode === 'rim' ? <RimTest disabled={status.tracking !== 'normal'} /> : null}
@@ -89,7 +89,7 @@ export default function App() {
     </ScrollView>
     {mode === 'demo' ? <View style={styles.actionDock}>
       <View style={{ flex: 1 }}><Button primary title="Finish scan" disabled={status.demo?.stage !== 'capturing' || (status.demo?.views ?? 0) < 6} onPress={() => capture.demoFinish()} /></View>
-      <View style={{ flex: 1 }}><Button title="Restart" disabled={!status.demo || status.demo.stage === 'idle'} onPress={() => capture.demoReset()} /></View>
+      <View style={{ flex: 1 }}><Button title="Restart" disabled={!status.demo || (status.demo.stage === 'idle' && !status.demo.tableSet)} onPress={() => capture.demoReset()} /></View>
     </View> : null}
   </SafeAreaView>;
 }
@@ -108,6 +108,15 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
   const rim = demo.rim;
   const food = demo.food;
   return <View>
+    {demo.stage === 'idle' ? <View style={styles.review}>
+      <Text style={styles.headline}>{demo.tableSet ? 'Align the surface, then choose the plate.' : 'Start with the bare table.'}</Text>
+      <Text style={styles.copy}>{demo.tableSet ? 'Look at the yellow marker from an angle. It should lie on the table, not hover above it. Adjust here if needed, then tap the plate center in the camera.' : 'Tap an empty, textured part of the table beside the plate. This sets the height before we look for the rim.'}</Text>
+      {demo.tableSet ? <>
+        <View style={styles.row}><Button title="Surface down 5 mm" onPress={() => capture.demoAdjustTable(-5)} /><Button title="Surface up 5 mm" onPress={() => capture.demoAdjustTable(5)} /></View>
+        <Text style={styles.small}>SURFACE ADJUSTMENT {Math.round(demo.tableOffsetMm ?? 0)} mm</Text>
+      </> : null}
+    </View> : null}
+    {!lidar && demo.tableSet ? <Text style={styles.small}>Point heights are estimated from the selected table and plate geometry on this phone. They do not measure the top of the food.</Text> : null}
     {demo.stage !== 'idle' ? <View style={styles.coverageCard}>
       <View style={styles.row}><Text style={styles.eyebrow}>COVERAGE</Text><Text style={styles.coverageNumber}>{Math.round(demo.coverage * 100)}%</Text></View>
       <View style={styles.track}><View style={[styles.fill, { width: `${Math.min(100, Math.max(0, demo.coverage * 100))}%` }]} /></View>
@@ -117,7 +126,7 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
     {demo.stage === 'capturing' ? <Text style={styles.small}>Coverage counts viewpoints around the plate. Orange cells are captured; include high and lower views. Automatic finish needs at least 60% and a supported outline.</Text> : null}
     {demo.fitError ? <Text style={styles.error}>Plate needs another look: {demo.fitError}. Recenter the plate and try new viewpoints.</Text> : null}
     {demo.imageBuildFailures ? <Text style={styles.error}>Some camera images could not be read. Restart the scan if coverage stops.</Text> : null}
-    {ready && !approved ? <View style={styles.review}><Text style={styles.headline}>Does the outline follow your plate?</Text><Text style={styles.copy}>Check the entire outer rim before identifying food. If it is off, restart and tap the plate center.</Text><Button primary title="Use this plate & identify food" onPress={() => { setApproved(true); identifyThenProbe(source); }} /></View> : null}
+    {ready && !approved ? <View style={styles.review}><Text style={styles.headline}>Does the outline follow your plate?</Text><Text style={styles.copy}>Check the entire outer rim before identifying food. If it is off, restart, align the table surface, then choose the plate center.</Text><Button primary title="Use this plate & identify food" onPress={() => { setApproved(true); identifyThenProbe(source); }} /></View> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ expanded: details }} onPress={() => setDetails(!details)} style={{ paddingVertical: 12 }}><Text style={styles.small}>{details ? 'HIDE SCAN DETAILS' : 'SHOW SCAN DETAILS'}</Text></Pressable>
     {details ? <View>
     <Text style={styles.small}>Last skipped view: {demo.hint ?? 'none'}{demo.rejections ? ` / ${Object.entries(demo.rejections).map(([reason, count]) => `${reason}: ${count}`).join(', ')}` : ''}</Text>
@@ -145,7 +154,7 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
       <Text style={styles.copy}>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
       <Button title="Up 2 mm" onPress={() => capture.demoNudge(2)} />
     </View> : null}
-    {demo.stage === 'capturing' ? <Text style={styles.small}>If the outline misses the plate, restart and tap its center.</Text> : null}
+    {demo.stage === 'capturing' ? <Text style={styles.small}>If the markers float, restart and align the table surface before selecting the plate.</Text> : null}
   </View>;
 }
 const styles = StyleSheet.create({

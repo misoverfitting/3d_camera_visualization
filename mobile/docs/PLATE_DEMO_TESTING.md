@@ -1,5 +1,42 @@
 # Testing the plate demo
 
+## Non-LiDAR placement fix (CAPTURE / 03)
+
+The first tap now selects **bare table beside the plate** using an existing plane's
+observed geometry. Estimated-plane and infinite-plane hits cannot establish the
+support plane. The second tap chooses the plate center by intersecting its camera
+ray with that same table plane. It never starts a new plane search through food.
+
+1. On a non-LiDAR phone, point at a textured patch of bare table and move sideways
+   until ARKit observes it. Tap it: a flat yellow marker should lie on the table.
+2. Look from a lower angle. If the marker is above/below the table, use **Surface
+   down 5 mm / Surface up 5 mm** before tapping the plate center. This adjusts the
+   selected support plane and the eventual center/rim/points together, not just
+   the probe overlays. Adjustments are disabled once capture starts; Restart is
+   available during setup. The adjustment is bounded to +/-100 mm.
+3. Tap the plate center. Its marker must stay on the selected plane even when
+   food or another ARKit plane lies above it. Move the camera sideways by at least
+   8 cm before expecting a rim-height estimate. Rotating or raising the phone in
+   place must not produce a supposedly measured rim height.
+4. Complete a scan. Non-LiDAR generic probe points use the estimated plate floor
+   (up to 8 mm above the selected table), never the unverified multi-view cloud.
+   These heights are estimates, not measurements of food thickness. On LiDAR,
+   surface heights use repeatedly observed points; high food measurements cannot
+   lift all unmeasured ring spots above the rim.
+5. Test Restart after selecting the table and after adjusting its height. Both
+   must remove the old marker, selected plane, adjustment, views and food state.
+6. Repeat on two table heights and with food covering the plate center. Check the
+   yellow marker, rim and generic probe dots separately from a side view.
+
+The existing **Points down / up** controls still adjust probe visualization only;
+they are not a substitute for the setup-time surface alignment controls.
+
+Regression coverage: `SupportPlacementTests` checks selection on a known table
+despite an elevated alternative, height correction along the original camera ray,
+invalid intersections and height borrowing. `OrbitTests` rejects vertical-only
+travel before height fitting. Native Swift tests still require a Mac; browser
+checks cover the setup UI and the adjustment-to-native call, not ARKit accuracy.
+
 ## Follow-up for inaccurate outlines / coverage near 54%
 
 - Capture image preparation and rim fitting now run on separate queues. Test that

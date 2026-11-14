@@ -86,6 +86,9 @@ public struct PipelineConfig: Sendable {
   /// Automatic rim fitting from image edges across an orbit. Stands in for the learned
   /// RimDetector (§6.4) and, like the triangulator, never reads depth.
   public struct EdgeRim: Sendable {
+    /// Minimum in-plane camera travel before estimating rim height. Source: initial
+    /// conservative gate against high/radius ambiguity; validate on phone captures.
+    public var minBaselineM = 0.08
     /// Center search half-width around the seed (a tap on the dish). Source: initial guess.
     public var centerSearchM = 0.06
     /// Rim radius range: saucer to large platter. Source: initial guess.

@@ -43,7 +43,7 @@ public class TareCaptureModule: Module {
       try Self.cameraView().rimMeasure(taps: taps, rulerDiameterMm: rulerDiameterMm)
     }.runOnQueue(.main)
     AsyncFunction("rimReset") { TareCaptureView.current?.rimReset() }.runOnQueue(.main)
-    // Plate demo (PlateDemo.swift): tapping the plate starts it; these end or restart it.
+    // Plate demo: select bare table, align it, then choose the plate center.
     AsyncFunction("demoFinish") { TareCaptureView.current?.demoFinish() }.runOnQueue(.main)
     AsyncFunction("demoReset") { TareCaptureView.current?.demoReset() }.runOnQueue(.main)
     AsyncFunction("demoIdentify") { (source: String, promise: Promise) in
@@ -56,6 +56,7 @@ public class TareCaptureModule: Module {
       }
     }.runOnQueue(.main)
     AsyncFunction("demoProbe") { TareCaptureView.current?.demoProbe() }.runOnQueue(.main)
+    AsyncFunction("demoAdjustTable") { (deltaMm: Double) in TareCaptureView.current?.demoAdjustTable(deltaMm) }.runOnQueue(.main)
     AsyncFunction("demoNudge") { (deltaMm: Double) in TareCaptureView.current?.demoNudge(deltaMm) }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
@@ -227,7 +228,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // The demo shows only the plate, rim and spots; depth keeps fusing for spot heights.
     cloudNode.isHidden = value
     preview.debugOptions = value ? [] : [.showFeaturePoints]
-    emit(value ? "Tap the middle of the plate to start." : "Tap a cyan surface near the object to place the scan box.")
+    emit(value ? "First tap bare table beside the plate to set its height." : "Tap a cyan surface near the object to place the scan box.")
   }
   func setForceMultiView(_ value: Bool) {
     let mode: DepthMode = value || !DepthMode.lidarSupported ? .multiView : .lidar
@@ -461,7 +462,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       horizontalPlanes = horizontalIDs.count
       verticalPlanes = planes.filter { $0.alignment == .vertical }.count
       featurePoints = frame.rawFeaturePoints?.points.count ?? 0
-      let needsCoaching = (!demo.enabled || demo.stage == .idle) && horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
+      let needsCoaching = (!demo.enabled || demo.table == nil) && horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
       if coaching.isActive != needsCoaching { coaching.setActive(needsCoaching, animated: true) }
       let message: String
       if demo.enabled { message = demoMessage(tracking: tracking, planes: horizontalPlanes) }

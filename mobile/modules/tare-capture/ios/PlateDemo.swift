@@ -17,6 +17,8 @@ final class PlateDemo {
   var enabled = false
   var stage = Stage.idle
   var table: Plane?
+  var tableMarkerWorld: SIMD3<Double>?
+  var tableOffsetM = 0.0
   var taps: [SIMD3<Double>] = []
   var selector: OrbitSelector?
   var views: [EdgeView] = []
@@ -51,7 +53,7 @@ final class PlateDemo {
   var seed: SIMD3<Double>? { taps.isEmpty ? nil : taps.reduce(.zero, +) / Double(taps.count) }
 
   func reset() {
-    stage = .idle; table = nil; taps = []; selector = nil; views = []; lastPose = nil; hint = nil
+    stage = .idle; table = nil; tableMarkerWorld = nil; tableOffsetM = 0; taps = []; selector = nil; views = []; lastPose = nil; hint = nil
     fit = nil; fitError = nil; spots = []; lidar = nil; fittedViews = 0; finalPending = false; generation += 1
     photo = nil; food = FoodState(); probe.stop()
     building = 0; finishRequested = false; imageBuildFailures = 0; rejectionCounts = [:]
@@ -62,6 +64,9 @@ final class PlateDemo {
   var status: [String: Any] {
     var out: [String: Any] = ["stage": stage.rawValue, "views": views.count, "taps": taps.count,
                               "coverage": selector?.coverage ?? 0, "fitting": fitting, "spots": spots.count]
+    out["tableSet"] = table != nil
+    out["tableOffsetMm"] = tableOffsetM * 1000
+    out["setupStep"] = table == nil ? "table" : (stage == .idle ? "plate" : "capture")
     out["coveredCellsByBand"] = selector?.coveredCellsByBand ?? []
     out["rejections"] = rejectionCounts
     out["imageBuildFailures"] = imageBuildFailures
@@ -97,30 +102,59 @@ final class PlateDemo {
 extension TareCaptureView {
   func demoTap(_ location: CGPoint) {
     guard demo.stage != .done else { return }
-    var hit: ARRaycastResult?
-    for target in [ARRaycastQuery.Target.existingPlaneInfinite, .estimatedPlane] {
-      if let query = preview.raycastQuery(from: location, allowing: target, alignment: .horizontal),
-         let first = preview.session.raycast(query).first { hit = first; break }
+    guard let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState else {
+      emit("Move slowly over the bare table until tracking is ready."); return
     }
-    guard let hit, let frame = preview.session.currentFrame, case .normal = frame.camera.trackingState else {
-      emit("No table under that tap yet. Move sideways until cyan surfaces appear, then tap the plate."); return
-    }
-    let position = simd_double4x4(hit.worldTransform).columns.3
-    let point = SIMD3(position.x, position.y, position.z)
-    if demo.stage == .idle {
-      let table = (hit.anchor as? ARPlaneAnchor).map(Plane.init) ?? Plane(pointWorld: point, normalWorld: SIMD3(0, 1, 0))
+    if demo.table == nil {
+      // Never infer the table from a tap on elevated food or extrapolate an unseen plane.
+      guard let query = preview.raycastQuery(from: location, allowing: .existingPlaneGeometry, alignment: .horizontal),
+            let hit = preview.session.raycast(query).first,
+            let anchor = hit.anchor as? ARPlaneAnchor else {
+        emit("Point at bare table beside the plate and move sideways until a surface appears, then tap it."); return
+      }
+      let table = Plane(anchor)
+      guard simd_dot(table.normalWorld, SIMD3(0, 1, 0)) > 0.98 else {
+        emit("Choose a flat area of the table beside the plate."); return
+      }
+      let position = simd_double4x4(hit.worldTransform).columns.3
+      let hitWorld = SIMD3(position.x, position.y, position.z)
+      let camera = simd_double4x4(frame.camera.transform).columns.3
+      let distance = simd_distance(hitWorld, SIMD3(camera.x, camera.y, camera.z))
+      guard distance >= 0.15, distance <= 1.0 else {
+        emit("Move 15-100 cm from the bare tabletop and tap it again; avoid the floor."); return
+      }
       demo.table = table
-      let seed = point - table.signedDistanceM(point) * table.normalWorld
+      demo.tableMarkerWorld = hitWorld - table.signedDistanceM(hitWorld) * table.normalWorld
+      emit("Check that the table marker sits on the bare table. Then tap the plate center.")
+    } else if demo.stage == .idle, let table = demo.table,
+              let query = preview.raycastQuery(from: location, allowing: .existingPlaneGeometry, alignment: .horizontal) {
+      // Use only the selected table plane; do not raycast again against food/floor candidates.
+      let ray = Ray(originWorld: SIMD3<Double>(query.origin), directionWorld: SIMD3<Double>(query.direction))
+      guard let seed = SupportPlacement.target(ray: ray, tablePlane: table) else {
+        emit("Keep the plate centered and 15-100 cm away, then tap its center."); return
+      }
       demo.taps = [seed]
       demo.selector = OrbitSelector(targetWorld: seed, tablePlane: table)
       demo.stage = .capturing
-      emit("Plate selected. Circle it slowly, from high above to low at the side.")
-    } else if let seed = demo.seed, simd_distance(seed, point) < 0.15 {
-      // Extra taps must not silently move the fitter away from the coverage target.
+      emit("Plate center set on your table. Move around it slowly, including lower views.")
+    } else if demo.stage == .capturing {
       demo.hint = "recenter"
-      emit("To choose a new plate center, restart the scan and tap its center.")
+      emit("Restart to select the table and plate center again.")
     }
     drawDemo()
+  }
+
+  /// Calibrates the entire support plane before any scan geometry is captured.
+  func demoAdjustTable(_ deltaMm: Double) {
+    guard demo.stage == .idle, let table = demo.table, let marker = demo.tableMarkerWorld,
+          deltaMm.isFinite else { return }
+    let nextOffset = min(0.1, max(-0.1, demo.tableOffsetM + deltaMm / 1000))
+    let delta = nextOffset - demo.tableOffsetM
+    demo.table = table.offset(byM: delta)
+    demo.tableMarkerWorld = marker + delta * table.normalWorld
+    demo.tableOffsetM = nextOffset
+    drawDemo()
+    emit("Align the marker with the bare table from a side view, then tap the plate center.")
   }
 
   func demoFinish() {
@@ -140,7 +174,7 @@ extension TareCaptureView {
 
   func demoReset() {
     demo.reset()
-    emit("Tap the middle of the plate to start.")
+    emit("First tap bare table beside the plate to set its height.")
   }
 
   func demoConsider(_ frame: ARFrame) {
@@ -220,7 +254,10 @@ extension TareCaptureView {
     demo.finalPending = false
     demo.fitting = true; demo.fittedViews = views.count
     let generation = demo.generation
-    let cloudSnapshot = { [cloud] in cloud.points(minCount: 1) }
+    // Unverified multi-view feature points can float above the dish. Use only
+    // repeatedly observed LiDAR points for surface heights; non-LiDAR uses the plane.
+    let useMeasuredSurface = depthMode == .lidar
+    let cloudSnapshot = { [cloud] in cloud.points(minCount: 3) }
     demo.fitQueue.async { [weak self, depthQueue] in
       let result = EdgeRimFitter().fit(views, tablePlane: table, seedWorld: seed)
       let rim = try? result.get().rim
@@ -230,7 +267,7 @@ extension TareCaptureView {
                                      approximateCenterWorld: rim.centerWorld, searchRadiusM: rim.radiusM * 1.3 + 0.03)
       } : nil
       depthQueue.async {
-        let points = rim == nil ? [] : cloudSnapshot().map { SIMD3<Double>($0) }
+        let points = rim == nil || !useMeasuredSurface ? [] : cloudSnapshot().map { SIMD3<Double>($0) }
         let spots = rim.map { ProbeRing.spots(rim: $0, tablePlane: table, surfacePointsWorld: points) } ?? []
         DispatchQueue.main.async {
           guard let self, generation == self.demo.generation else { return }
@@ -264,8 +301,9 @@ extension TareCaptureView {
     switch demo.stage {
     case .idle:
       if tracking != "normal" { return "Move slowly over the table to start tracking." }
-      return planes == 0 ? "Look down at the table and move sideways until cyan surfaces appear."
-                         : "Tap the middle of the plate to start."
+      if demo.table != nil { return "Check the marker is on the bare table, then tap the plate center." }
+      return planes == 0 ? "Look at bare table beside the plate and move slowly sideways to find its surface."
+                         : "First tap bare table beside the plate, not the food, to set the surface height."
     case .capturing:
       let covered = "\(Int((demo.selector?.coverage ?? 0) * 100))% covered"
       if demo.hint == "recenter" { return "Restart to choose a new plate center. \(covered)" }
@@ -294,10 +332,12 @@ extension TareCaptureView {
 
   func drawDemo() {
     demo.node.childNodes.forEach { $0.removeFromParentNode() }
-    if demo.fit == nil, let seed = demo.seed {
-      let marker = SCNNode(geometry: SCNSphere(radius: 0.004))
+    if demo.fit == nil, let table = demo.table, let point = demo.seed ?? demo.tableMarkerWorld {
+      // A thin, flat target makes height alignment visible; a sphere itself protrudes.
+      let marker = SCNNode(geometry: SCNCylinder(radius: 0.012, height: 0.0003))
       marker.geometry?.materials = [demoMaterial(.systemYellow)]
-      marker.simdPosition = SIMD3<Float>(seed)
+      marker.simdPosition = SIMD3<Float>(point + 0.00015 * table.normalWorld)
+      marker.simdOrientation = simd_quatf(from: SIMD3(0, 1, 0), to: SIMD3<Float>(table.normalWorld))
       demo.node.addChildNode(marker)
     }
     guard let rim = demo.fit?.rim, let table = demo.table else { return }

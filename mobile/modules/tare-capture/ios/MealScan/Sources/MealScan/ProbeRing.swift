@@ -28,7 +28,9 @@ public enum ProbeRing {
       return (position, nearby.count >= 3 ? Numerics.percentile(nearby, config.surfacePercentile) : nil)
     }
     // Unmeasured spots take the measured spots' median: the plate is level, so this beats a guess.
-    let shared = Numerics.percentile(placed.compactMap(\.heightM), 0.5) ?? min(config.fallbackSurfaceHeightM, rim.heightM)
+    // A pile of food at one measured spot must not lift all unmeasured plate spots.
+    let shared = min(rim.heightM, max(0, Numerics.percentile(placed.compactMap(\.heightM), 0.5)
+      ?? config.fallbackSurfaceHeightM))
     return placed.enumerated().map { i, spot in
       let heightM = spot.heightM ?? shared
       return ProbeSpot(index: i, positionWorld: frame.world(spot.position, heightM: heightM),

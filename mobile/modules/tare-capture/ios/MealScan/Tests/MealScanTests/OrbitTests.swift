@@ -104,6 +104,16 @@ final class OrbitTests: XCTestCase {
     }
   }
 
+  func testEdgeFitRejectsVerticalOnlyCameraTravelBeforeEstimatingHeight() {
+    let views = (0..<4).map { i in
+      let frame = Synthetic.keyframe(id: i, offset: SIMD3(0.02, 0, 0.03), heightM: 0.3 + Double(i) * 0.05, intrinsics: Self.small)
+      return EdgeView(keyframe: frame, image: GrayImage(widthPx: 480, heightPx: 360, pixels: .init(repeating: 0, count: 480 * 360)))
+    }
+    guard case .failure(.insufficientBaseline) = EdgeRimFitter().fit(views, tablePlane: Synthetic.table, seedWorld: Synthetic.dishCenter) else {
+      return XCTFail("An orbit needs horizontal travel before reporting a rim height")
+    }
+  }
+
   func testOrbitSelectorSpreadsKeyframesAndTracksCoverage() {
     var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
     let views = Self.orbit()
