@@ -110,29 +110,35 @@ extension TareCaptureView {
       guard let query = preview.raycastQuery(from: location, allowing: .existingPlaneGeometry, alignment: .horizontal),
             let hit = preview.session.raycast(query).first,
             let anchor = hit.anchor as? ARPlaneAnchor else {
-        emit("Point at bare table beside the plate and move sideways until a surface appears, then tap it."); return
+        demo.hint = "tableNotObserved"
+        emit(demoMessage(tracking: "normal", planes: 0)); return
       }
       let table = Plane(anchor)
       guard simd_dot(table.normalWorld, SIMD3(0, 1, 0)) > 0.98 else {
-        emit("Choose a flat area of the table beside the plate."); return
+        demo.hint = "tableNotFlat"
+        emit(demoMessage(tracking: "normal", planes: 0)); return
       }
       let position = simd_double4x4(hit.worldTransform).columns.3
       let hitWorld = SIMD3(position.x, position.y, position.z)
       let camera = simd_double4x4(frame.camera.transform).columns.3
       let distance = simd_distance(hitWorld, SIMD3(camera.x, camera.y, camera.z))
       guard distance >= 0.15, distance <= 1.0 else {
-        emit("Move 15-100 cm from the bare tabletop and tap it again; avoid the floor."); return
+        demo.hint = "tableTooFar"
+        emit(demoMessage(tracking: "normal", planes: 0)); return
       }
+      demo.hint = nil
       demo.table = table
       demo.tableMarkerWorld = hitWorld - table.signedDistanceM(hitWorld) * table.normalWorld
-      emit("Check that the table marker sits on the bare table. Then tap the plate center.")
+      emit(demoMessage(tracking: "normal", planes: 1))
     } else if demo.stage == .idle, let table = demo.table,
               let query = preview.raycastQuery(from: location, allowing: .existingPlaneGeometry, alignment: .horizontal) {
       // Use only the selected table plane; do not raycast again against food/floor candidates.
       let ray = Ray(originWorld: SIMD3<Double>(query.origin), directionWorld: SIMD3<Double>(query.direction))
       guard let seed = SupportPlacement.target(ray: ray, tablePlane: table) else {
-        emit("Keep the plate centered and 15-100 cm away, then tap its center."); return
+        demo.hint = "plateOutOfRange"
+        emit(demoMessage(tracking: "normal", planes: 1)); return
       }
+      demo.hint = nil
       demo.taps = [seed]
       demo.selector = OrbitSelector(targetWorld: seed, tablePlane: table)
       demo.stage = .capturing
@@ -153,8 +159,9 @@ extension TareCaptureView {
     demo.table = table.offset(byM: delta)
     demo.tableMarkerWorld = marker + delta * table.normalWorld
     demo.tableOffsetM = nextOffset
+    demo.hint = nil
     drawDemo()
-    emit("Align the marker with the bare table from a side view, then tap the plate center.")
+    emit(demoMessage(tracking: "normal", planes: 1))
   }
 
   func demoFinish() {
@@ -301,9 +308,16 @@ extension TareCaptureView {
     switch demo.stage {
     case .idle:
       if tracking != "normal" { return "Move slowly over the table to start tracking." }
-      if demo.table != nil { return "Check the marker is on the bare table, then tap the plate center." }
-      return planes == 0 ? "Look at bare table beside the plate and move slowly sideways to find its surface."
-                         : "First tap bare table beside the plate, not the food, to set the surface height."
+      switch demo.hint {
+      case "tableNotObserved": return "No tracked table here yet. Move sideways over textured bare table beside the plate, then tap it."
+      case "tableNotFlat": return "Choose a flat patch of bare table beside the plate."
+      case "tableTooFar": return "Move 15-100 cm from the tabletop and tap it again; avoid the floor."
+      case "plateOutOfRange": return "Keep the plate centered and 15-100 cm away, then tap its center."
+      default: break
+      }
+      if demo.table != nil { return "Look from an angle: the yellow marker should sit on the table. Adjust Surface down/up if needed, then tap the plate center." }
+      return planes == 0 ? "Move slowly sideways over textured bare table beside the plate until a surface appears, then tap it."
+                         : "Tap bare table beside the plate, not the food, to set the surface height."
     case .capturing:
       let covered = "\(Int((demo.selector?.coverage ?? 0) * 100))% covered"
       if demo.hint == "recenter" { return "Restart to choose a new plate center. \(covered)" }
@@ -315,6 +329,7 @@ extension TareCaptureView {
       case .distance: return "Stay 15\u{2013}100 cm from the plate. \(covered)"
       case .trackingLimited: return "Tracking is limited. Move slowly. \(covered)"
       default:
+        if demo.fitError != nil { return "Rim outline uncertain. Move around new sides with the plate centered; restart surface setup if markers float. \(covered)" }
         let bands = demo.selector?.coveredCellsByBand ?? [0, 0]
         if let low = bands.first, let high = bands.last, low < high {
           return "Lower the phone below 45 degrees and move around the plate, keeping it centered. \(covered)"
@@ -326,7 +341,7 @@ extension TareCaptureView {
       let probe = demo.probe
       if probe.running { return "Probing \(probe.current ?? "the plate") (\(min(probe.done + 1, probe.total)) of \(probe.total))…" }
       if probe.total > 0 && probe.done == probe.total { return "Probed \(probe.total) spot\(probe.total == 1 ? "" : "s")." }
-      return demo.fitError != nil || demo.fit == nil ? "Plate outline uncertain. Restart and tap the plate center." : "Check that the outline follows your plate before identifying food."
+      return demo.fitError != nil || demo.fit == nil ? "Plate outline uncertain. Restart and align the table surface before choosing the plate center." : "Check the entire outer rim. If the outline is off, restart surface setup; otherwise choose Use this plate & identify food."
     }
   }
 

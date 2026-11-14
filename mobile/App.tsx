@@ -108,27 +108,21 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
   const rim = demo.rim;
   const food = demo.food;
   return <View>
-    {demo.stage === 'idle' ? <View style={styles.review}>
-      <Text style={styles.headline}>{demo.tableSet ? 'Align the surface, then choose the plate.' : 'Start with the bare table.'}</Text>
-      <Text style={styles.copy}>{demo.tableSet ? 'Look at the yellow marker from an angle. It should lie on the table, not hover above it. Adjust here if needed, then tap the plate center in the camera.' : 'Tap an empty, textured part of the table beside the plate. This sets the height before we look for the rim.'}</Text>
-      {demo.tableSet ? <>
-        <View style={styles.row}><Button title="Surface down 5 mm" onPress={() => capture.demoAdjustTable(-5)} /><Button title="Surface up 5 mm" onPress={() => capture.demoAdjustTable(5)} /></View>
-        <Text style={styles.small}>SURFACE ADJUSTMENT {Math.round(demo.tableOffsetMm ?? 0)} mm</Text>
-      </> : null}
+    {demo.stage === 'idle' && demo.tableSet ? <View style={styles.row}>
+      <Button title="Surface down 5 mm" onPress={() => capture.demoAdjustTable(-5)} />
+      <Button title="Surface up 5 mm" onPress={() => capture.demoAdjustTable(5)} />
     </View> : null}
-    {!lidar && demo.tableSet ? <Text style={styles.small}>Point heights are estimated from the selected table and plate geometry on this phone. They do not measure the top of the food.</Text> : null}
     {demo.stage !== 'idle' ? <View style={styles.coverageCard}>
       <View style={styles.row}><Text style={styles.eyebrow}>COVERAGE</Text><Text style={styles.coverageNumber}>{Math.round(demo.coverage * 100)}%</Text></View>
       <View style={styles.track}><View style={[styles.fill, { width: `${Math.min(100, Math.max(0, demo.coverage * 100))}%` }]} /></View>
       {[1, 0].map(band => <View key={band} style={styles.cellRow} accessibilityLabel={`${band === 1 ? 'High' : 'Lower'} coverage: ${demo.coveredCellsByBand?.[band] ?? 0} of 12 viewpoints`}><Text style={styles.cellLabel}>{band === 1 ? 'HIGH' : 'LOWER'}</Text>{Array.from({ length: 12 }, (_, cell) => <View key={cell} style={[styles.cell, demo.coverageCells?.[band]?.[cell] && styles.cellCovered]} />)}</View>)}
       <View style={styles.row}><Text style={styles.small}>HIGH VIEWS  {demo.coveredCellsByBand?.[1] ?? 0}/12</Text><Text style={styles.small}>LOWER VIEWS  {demo.coveredCellsByBand?.[0] ?? 0}/12</Text></View>
     </View> : null}
-    {demo.stage === 'capturing' ? <Text style={styles.small}>Coverage counts viewpoints around the plate. Orange cells are captured; include high and lower views. Automatic finish needs at least 60% and a supported outline.</Text> : null}
-    {demo.fitError ? <Text style={styles.error}>Plate needs another look: {demo.fitError}. Recenter the plate and try new viewpoints.</Text> : null}
-    {demo.imageBuildFailures ? <Text style={styles.error}>Some camera images could not be read. Restart the scan if coverage stops.</Text> : null}
-    {ready && !approved ? <View style={styles.review}><Text style={styles.headline}>Does the outline follow your plate?</Text><Text style={styles.copy}>Check the entire outer rim before identifying food. If it is off, restart, align the table surface, then choose the plate center.</Text><Button primary title="Use this plate & identify food" onPress={() => { setApproved(true); identifyThenProbe(source); }} /></View> : null}
+    {ready && !approved ? <Button primary title="Use this plate & identify food" onPress={() => { setApproved(true); identifyThenProbe(source); }} /> : null}
     <Pressable accessibilityRole="button" accessibilityState={{ expanded: details }} onPress={() => setDetails(!details)} style={{ paddingVertical: 12 }}><Text style={styles.small}>{details ? 'HIDE SCAN DETAILS' : 'SHOW SCAN DETAILS'}</Text></Pressable>
     {details ? <View>
+    {demo.tableSet ? <Text style={styles.small}>Surface adjustment: {Math.round(demo.tableOffsetMm ?? 0)} mm</Text> : null}
+    {!lidar && demo.tableSet ? <Text style={styles.small}>Point heights are estimated from the table and plate geometry, not measured food height.</Text> : null}
     <Text style={styles.small}>Last skipped view: {demo.hint ?? 'none'}{demo.rejections ? ` / ${Object.entries(demo.rejections).map(([reason, count]) => `${reason}: ${count}`).join(', ')}` : ''}</Text>
     {demo.stage !== 'idle' ? <Text style={styles.copy}>
       {demo.views} views · {Math.round(demo.coverage * 100)}% coverage{demo.taps > 1 ? ` · ${demo.taps} taps` : ''}{demo.fitting ? ' · fitting…' : ''}
@@ -154,7 +148,6 @@ function DemoPanel({ demo, lidar }: { demo?: Demo; lidar: boolean }) {
       <Text style={styles.copy}>{(demo.heightOffsetMm ?? 0) >= 0 ? '+' : ''}{(demo.heightOffsetMm ?? 0).toFixed(0)} mm</Text>
       <Button title="Up 2 mm" onPress={() => capture.demoNudge(2)} />
     </View> : null}
-    {demo.stage === 'capturing' ? <Text style={styles.small}>If the markers float, restart and align the table surface before selecting the plate.</Text> : null}
   </View>;
 }
 const styles = StyleSheet.create({
@@ -190,5 +183,4 @@ const styles = StyleSheet.create({
   coverageNumber: { fontFamily: brand.mono, fontSize: 25, color: brand.ink },
   track: { height: 3, backgroundColor: brand.line, marginVertical: 12 },
   fill: { height: 3, backgroundColor: brand.accent },
-  review: { padding: 14, backgroundColor: brand.panel, borderLeftWidth: 2, borderColor: brand.accent, marginVertical: 10 },
 });
