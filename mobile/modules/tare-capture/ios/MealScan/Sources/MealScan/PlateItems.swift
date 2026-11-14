@@ -23,6 +23,10 @@ public struct ItemRegion: Sendable {
   public var box: SIMD4<Double>
   /// 1-3 points well inside the item, normalized.
   public var points: [SIMD2<Double>]
+
+  public init(widthPx: Int, heightPx: Int, mask: [Bool], areaPx: Int, box: SIMD4<Double>, points: [SIMD2<Double>]) {
+    self.widthPx = widthPx; self.heightPx = heightPx; self.mask = mask; self.areaPx = areaPx; self.box = box; self.points = points
+  }
 }
 
 /// Zero-training item proposals for the on-device food ID (tare_impl.md §6.9 baseline):

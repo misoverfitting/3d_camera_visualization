@@ -3,7 +3,7 @@
 How to build, run and check the plate demo on `feat/plate-demo`:
 - tap a plate and circle it;
 - the rim is found automatically;
-- Claude labels each food item;
+- the phone finds and labels each food item, with no network;
 - 2–3 colored points land on each item.
 
 It also covers the "Rim taps" test mode and the automated tests.
@@ -60,6 +60,8 @@ In practice the error is under 1 mm.
 `--noconftest` skips `server/tests/conftest.py`, which imports the reconstruction pipeline and its heavy dependencies (open3d, pycolmap). Drop the flag if your environment already has `requirements.txt` installed.
 
 ## Start the backend
+
+**Not needed any more.** Food ID now runs on the phone (see [Food labelling](#6-food-labelling)). The backend below is the legacy Claude path, kept until it is removed.
 
 The phone never holds the Anthropic key. It posts a cropped JPEG to `POST /api/food/identify`, implemented in `server/app/food_vision.py`, and the server calls Claude.
 
@@ -274,22 +276,39 @@ The scan finishes on its own at 60% coverage with at least 18 views, or press **
 
 ### 6. Food labelling
 
-Labelling starts automatically about a second after the ring turns green ("Identifying the food…"), and takes about 3–10 s.
+Labelling starts automatically about a second after the ring turns green ("Identifying the food…"). It runs on the phone, with no network, and should take about a second.
 
 **What happens:**
-- The app uses the most overhead photo from the orbit (under 45° from straight down), cropped to the plate with 15% margin and rotated upright.
-- The 8 ring spots are replaced by **2–3 coloured discs per item**.
-- A **floating label** in the same colour sits about 3 cm above each item and turns to face you.
-- The panel shows a **legend**: colour, label, food type, number of points, and "unsure" when Claude's confidence is under 0.6.
+- **Photo:** the app uses the most overhead photo from the orbit (under 45° from straight down), cropped to the plate with 15% margin and rotated upright.
+- **Items:** `PlateItems` marks the pixels inside the rim that differ from the bare plate (sampled in a ring just inside the rim) as food, then splits them into items.
+- **Labels:** the bundled classifier names each item from a crop with everything else dimmed. Items with the same label are merged.
+- **Dish:** the whole plate is also classified once, against the 101 Food-101 dish classes, for a dish name.
+- **On screen:**
+  - The 8 ring spots are replaced by **2–3 coloured discs per item**.
+  - A **floating label** in the item's colour sits about 3 cm above each item.
+  - The panel shows **"Looks like <dish>"** with the runner-up dishes, then a **legend**: colour, label, food type and number of points. Below 60% confidence it adds "unsure" and the next guesses.
 
 **Check:**
 - Each item's discs sit **on that item**, not on the plate or a neighbouring item.
-- Labels are plausible.
+- The dish name and item labels are plausible.
 - Items touching each other are split sensibly.
-- The **number of discs** may be lower than Claude returned. Points that would land off the plate are dropped, and an item with no remaining points disappears.
+
+**Field log (please send these):** every identification is saved to the app's Documents in `FoodScans/<date-time>/`:
+
+| File | Contents |
+| --- | --- |
+| `frame.jpg` | The full camera frame. |
+| `plate.jpg` | The upright plate crop the model ran on. |
+| `overlay.jpg` | The same crop marked up: each proposed item tinted in its colour, the bare-plate sample ring in blue, and everything outside the searched area darkened. |
+| `region-<n>.jpg`, `plate-input.jpg` | Exactly what the classifier saw for each item and for the whole plate. |
+| `scan.json` | Every prediction, with its top 3, boxes and points. |
+
+To send them, tap **Share food scans (N)** and AirDrop or save the zip. They are also in the Files app under On My iPhone → Tare Capture.
+
+A one-line note per scan of what was actually on the plate helps a lot, but isn't required. `overlay.jpg` shows whether a miss is the item-finding step (wrong regions, or the blue ring sitting on food) or the classifier (good region, wrong name).
 
 **Other controls:**
-- **Identify again** re-runs labelling on the same photo and costs another call.
+- **Identify again** re-runs labelling on the same photo and saves another scan.
 - **Restart** clears everything for a new plate.
 
 ### 7. Probe simulation
@@ -387,8 +406,12 @@ Each measurement is saved to the phone. In the Files app, open On My iPhone → 
 | Model reader, pen rig, stroke poses | `…/MealScan/GLBModel.swift`, `…/MealScan/ProbeStroke.swift` |
 | Probe animation | `mobile/modules/tare-capture/ios/ProbeSim.swift` |
 | Demo flow, AR drawing | `mobile/modules/tare-capture/ios/PlateDemo.swift` |
-| Overhead photo, upload, food points | `mobile/modules/tare-capture/ios/FoodID.swift` |
+| Overhead photo, food points | `mobile/modules/tare-capture/ios/FoodID.swift` |
+| Item finding | `…/MealScan/PlateItems.swift` |
+| On-device classifier, dish guess | `mobile/modules/tare-capture/ios/LocalFoodID.swift` |
+| Field log (`FoodScans/`) | `mobile/modules/tare-capture/ios/FoodScanLog.swift` |
+| Classifier training and export | `ml/foodclass/` (see `ml/README.md`) |
 | Rim taps mode | `mobile/modules/tare-capture/ios/RimTapTest.swift`, `mobile/RimTest.tsx` |
 | UI | `mobile/App.tsx` |
-| Backend endpoint | `server/app/food_vision.py` (`POST /api/food/identify`) |
+| Backend endpoint (legacy, unused) | `server/app/food_vision.py` (`POST /api/food/identify`) |
 | Build-time backend config | `mobile/app.config.js` (`TARE_API_URL`, `TARE_API_TOKEN`) |

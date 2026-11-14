@@ -29,15 +29,11 @@ public class TareCaptureModule: Module {
       let zip = FileManager.default.temporaryDirectory.appendingPathComponent(source.lastPathComponent + ".zip")
       if FileManager.default.fileExists(atPath: zip.path) { try FileManager.default.removeItem(at: zip) }
       try FileManager.default.zipItem(at: source, to: zip)
-      DispatchQueue.main.async {
-        guard var presenter = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
-          .flatMap({ $0.windows }).first(where: { $0.isKeyWindow })?.rootViewController else { return }
-        while let next = presenter.presentedViewController { presenter = next }
-        let sheet = UIActivityViewController(activityItems: [zip], applicationActivities: nil)
-        sheet.popoverPresentationController?.sourceView = presenter.view
-        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: zip) }
-        presenter.present(sheet, animated: true)
-      }
+      Self.share(zip)
+    }
+    // Food ID field log (FoodScanLog.swift): every saved scan, zipped.
+    AsyncFunction("shareFoodScans") {
+      Self.share(try FoodScanLog.zip())
     }
     // Tap-the-rim test (RimTapTest.swift), acting on the mounted camera view.
     AsyncFunction("rimSnapshot") { (slot: Int) throws -> [String: Any] in
@@ -76,6 +72,19 @@ public class TareCaptureModule: Module {
 enum CaptureError: Error { case invalidRecording, imageEncoding }
 
 extension TareCaptureModule {
+  /// Presents the share sheet for a file and deletes it afterwards.
+  static func share(_ file: URL) {
+    DispatchQueue.main.async {
+      guard var presenter = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        .flatMap({ $0.windows }).first(where: { $0.isKeyWindow })?.rootViewController else { return }
+      while let next = presenter.presentedViewController { presenter = next }
+      let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+      sheet.popoverPresentationController?.sourceView = presenter.view
+      sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file) }
+      presenter.present(sheet, animated: true)
+    }
+  }
+
   static func cameraView() throws -> TareCaptureView {
     guard let view = TareCaptureView.current else { throw RimTapException("The camera is not open.") }
     return view

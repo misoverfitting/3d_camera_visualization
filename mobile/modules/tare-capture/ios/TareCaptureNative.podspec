@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
   s.source_files = '*.{h,mm,swift}', 'MealScan/Sources/**/*.swift'
   # Probe pen model (ProbeSim.swift) and the on-device food classifier (LocalFoodID.swift,
   # built by `python -m foodclass export`).
-  s.resource_bundles = { 'TareCaptureAssets' => ['Assets/*.glb', 'Assets/*.mlmodelc'] }
+  s.resource_bundles = { 'TareCaptureAssets' => ['Assets/*.glb', 'Assets/*.mlmodelc', 'Assets/*.json'] }
   s.public_header_files = 'TareFeatureTracker.h'
   # Fetched by mobile/scripts/fetch-opencv.sh (npm postinstall); not committed.
   s.vendored_frameworks = 'vendor/opencv2.framework'
