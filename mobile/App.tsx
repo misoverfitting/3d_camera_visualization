@@ -40,15 +40,19 @@ export default function App() {
     <StatusBar style="dark" />
     <View style={styles.topLine} />
     <ImageBackground source={require('./assets/brand/plate-horizon-glow-2.jpg')} imageStyle={{ opacity: 0.18 }} style={styles.header}>
-      <TareLogo />
-      <Text style={styles.eyebrow}>CAPTURE / 03{status.build ? `  ·  BUILD ${status.build}` : ''}</Text>
+      <View style={styles.headerRow}>
+        <View style={styles.logoBlock}>
+          <TareLogo width={100} />
+          <Text style={styles.buildLabel}>{status.build ? `BUILD ${status.build}` : 'CAPTURE / 03'}</Text>
+        </View>
+        <View style={styles.tabs} accessibilityRole="tablist">
+          {MODES.map(([value, label]) => <Pressable key={value} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ selected: mode === value, disabled: recording || !!status.saving }}
+            disabled={recording || status.saving} onPress={() => setMode(value)} style={[styles.tab, mode === value && styles.activeTab, (recording || status.saving) && { opacity: 0.4 }]}>
+            <Text numberOfLines={2} maxFontSizeMultiplier={1.4} style={[styles.tabLabel, mode === value && styles.activeTabLabel]}>{label}</Text>
+          </Pressable>)}
+        </View>
+      </View>
     </ImageBackground>
-    <View style={styles.tabs}>
-      {MODES.map(([value, label]) => <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected: mode === value, disabled: recording || !!status.saving }}
-        disabled={recording || status.saving} onPress={() => setMode(value)} style={[styles.tab, mode === value && styles.activeTab, (recording || status.saving) && { opacity: 0.4 }]}>
-        <Text style={[styles.tabLabel, mode === value && styles.activeTabLabel]}>{label}</Text>
-      </Pressable>)}
-    </View>
     <View style={styles.cameraFrame}>
     <CaptureView style={styles.camera} recording={recording} regionSize={size} captureWithoutBox={captureWithoutBox} resetToken={resetToken} forceMultiView={forceMultiView} demoMode={mode === 'demo'} onStatus={({ nativeEvent: e }) => {
       setStatus(e);
@@ -154,14 +158,17 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: brand.background },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   topLine: { height: 2, backgroundColor: brand.accent },
-  header: { paddingHorizontal: 20, paddingVertical: 18, gap: 12 },
+  header: { paddingHorizontal: 20, paddingVertical: 6 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  logoBlock: { width: 100, gap: 6 },
+  buildLabel: { fontFamily: brand.mono, fontSize: 8, letterSpacing: 1, color: brand.muted },
   eyebrow: { fontFamily: brand.mono, fontSize: 10, letterSpacing: 1, color: brand.body },
-  tabs: { flexDirection: 'row', marginHorizontal: 20, borderBottomWidth: 1, borderColor: brand.line },
-  tab: { flex: 1, minHeight: 44, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderColor: 'transparent' },
+  tabs: { flex: 1, maxWidth: 245, flexDirection: 'row', borderBottomWidth: 1, borderColor: brand.line },
+  tab: { flex: 1, minWidth: 0, minHeight: 44, paddingHorizontal: 5, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderColor: 'transparent' },
   activeTab: { borderColor: brand.accent },
-  tabLabel: { fontFamily: brand.sans, fontSize: 14, color: brand.muted },
+  tabLabel: { fontFamily: brand.sans, fontSize: 11, lineHeight: 14, textAlign: 'center', color: brand.muted },
   activeTabLabel: { color: brand.ink },
-  cameraFrame: { flex: 1, minHeight: 220, marginHorizontal: 20, marginTop: 16, backgroundColor: brand.ink, overflow: 'hidden' },
+  cameraFrame: { flex: 1, minHeight: 220, marginHorizontal: 20, marginTop: 4, backgroundColor: brand.ink, overflow: 'hidden' },
   camera: { flex: 1 },
   cameraTag: { position: 'absolute', top: 12, left: 12, flexDirection: 'row', alignItems: 'center', gap: 7, padding: 8, backgroundColor: '#1A1A18CC' },
   liveDot: { width: 5, height: 5, backgroundColor: brand.accent },
