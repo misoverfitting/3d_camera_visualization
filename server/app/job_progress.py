@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import json
 from pathlib import Path
 
 
@@ -32,6 +33,14 @@ def _complete_depth_map(path: Path) -> float | None:
 
 def dense_progress(work_dir: Path) -> dict:
     stereo = work_dir / 'dense' / 'stereo'
+    pointer = work_dir / 'active-dense.json'
+    if pointer.exists():
+        try:
+            dense = Path(json.loads(pointer.read_text())['path']).resolve()
+            if dense.is_relative_to(work_dir.resolve()):
+                stereo = dense / 'stereo'
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     try:
         # Alternating reference-image and source-selection lines. Use the actual
         # dense plan, not the upload count: not every uploaded image must register.

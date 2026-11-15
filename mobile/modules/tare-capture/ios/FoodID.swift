@@ -5,8 +5,9 @@ import SceneKit
 import simd
 
 // Food identification for the plate demo: the most overhead orbit photo, cropped to
-// the plate, goes to the backend (server/app/food_vision.py), which asks Claude for
-// each item's label and 2-3 points inside it. Points are lifted onto the plate with
+// the plate, is labeled on the phone (LocalFoodID.swift, logged by FoodScanLog.swift) or,
+// legacy, by the backend (server/app/food_vision.py), which asks Claude for each item's
+// label and 2-3 points inside it. Points are lifted onto the plate with
 // LiDAR depth when available (else the plate surface plane) and drawn in the item's color.
 
 struct FoodPhoto {
@@ -21,6 +22,8 @@ struct FoodItem {
   var confidence: Double
   var colorIndex: Int
   var points: [FoodPoint]
+  /// Runner-up labels from the on-device classifier.
+  var alternatives: [String] = []
 }
 
 struct FoodState {
@@ -28,6 +31,14 @@ struct FoodState {
   var phase = Phase.idle
   var error: String?
   var items: [FoodItem] = []
+  /// "on-device" or "claude".
+  var source = "on-device"
+  var model: String?
+  /// Whole-plate dish guess (Food-101 classes), best first.
+  var dish: [(String, Double)] = []
+  /// Folder of this scan in the field log, and how many scans are saved.
+  var saved: String?
+  var savedCount = 0
 
   static let palette: [(UIColor, String)] = [
     "#E4572E", "#17BEBB", "#FFC914", "#76B041", "#B07CFF", "#FF6F91", "#2E86AB", "#F18F01",
@@ -38,11 +49,18 @@ struct FoodState {
   }
 
   var status: [String: Any] {
-    var out: [String: Any] = ["phase": phase.rawValue]
+    var out: [String: Any] = ["phase": phase.rawValue, "source": source]
     if let error { out["error"] = error }
+    if let model { out["model"] = model }
+    if let best = dish.first {
+      out["dish"] = ["label": best.0, "confidence": best.1, "alternatives": dish.dropFirst().map(\.0)] as [String: Any]
+    }
+    if let saved { out["saved"] = saved }
+    out["savedCount"] = savedCount
     out["items"] = items.map { item -> [String: Any] in
       ["label": item.label, "category": item.category, "confidence": item.confidence,
-       "color": Self.palette[item.colorIndex % Self.palette.count].1, "points": item.points.count]
+       "color": Self.palette[item.colorIndex % Self.palette.count].1, "points": item.points.count,
+       "alternatives": item.alternatives]
     }
     return out
   }
@@ -53,7 +71,7 @@ extension TareCaptureView {
   func considerFoodPhoto(_ frame: ARFrame, pose: simd_double4x4) {
     let forward = -SIMD3(pose.columns.2.x, pose.columns.2.y, pose.columns.2.z)
     let tilt = acos(min(1, max(-1, simd_dot(simd_normalize(forward), SIMD3(0, -1, 0))))) * 180 / .pi
-    guard tilt < min(45, demo.photo?.tiltDeg ?? 45) else { return }
+    guard tilt < min(45, (demo.photo?.tiltDeg).map { $0 - 2 } ?? 45) else { return }
     let keyframe = Keyframe(frame: frame, id: -1, includeDepth: true)
     let buffer = frame.capturedImage, generation = demo.generation, context = demo.ciContext
     demo.photo = FoodPhoto(keyframe: keyframe, jpeg: Data(), tiltDeg: tilt)  // Claim the slot; JPEG follows.
@@ -69,33 +87,44 @@ extension TareCaptureView {
     }
   }
 
-  func demoIdentify(_ completion: @escaping (Result<[String: Any], Error>) -> Void) {
+  /// `onDevice`: PlateItems + the bundled Core ML classifier (LocalFoodID.swift), no
+  /// network. Otherwise the backend's Claude endpoint.
+  func demoIdentify(onDevice: Bool, _ completion: @escaping (Result<[String: Any], Error>) -> Void) {
     guard demo.stage == .done, let rim = demo.fit?.rim, let table = demo.table else {
       return completion(.failure(RimTapException("Finish the plate scan first.")))
+    }
+    guard demo.fitError == nil, (demo.fit?.edgeSupport ?? 0) >= (demo.selector?.config.minRimSupport ?? 0.3) else {
+      return completion(.failure(RimTapException("The plate outline is uncertain. Restart and recapture before identifying food.")))
     }
     guard let photo = demo.photo, !photo.jpeg.isEmpty else {
       return completion(.failure(RimTapException("No overhead photo yet. Restart and include a view from above.")))
     }
-    guard let base = Bundle.main.object(forInfoDictionaryKey: "TareApiURL") as? String,
-          let url = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/food/identify") else {
+    let base = Bundle.main.object(forInfoDictionaryKey: "TareApiURL") as? String
+    let url = base.flatMap { URL(string: $0.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/api/food/identify") }
+    if !onDevice && url == nil {
       return completion(.failure(RimTapException("No backend configured. Build with TARE_API_URL set.")))
     }
+    let classifier = onDevice ? LocalFoodClassifier.shared : nil
+    if onDevice && classifier == nil {
+      return completion(.failure(RimTapException("The on-device food model is missing from the app.")))
+    }
     guard demo.food.phase != .working else { return completion(.failure(RimTapException("Already identifying."))) }
-    demo.food = FoodState(phase: .working)
+    demo.food = FoodState(phase: .working, source: onDevice ? "on-device" : "claude", model: classifier.map { "FoodClassifier \($0.version)" })
     emit("Identifying the food…")
     let token = Bundle.main.object(forInfoDictionaryKey: "TareApiToken") as? String
     let generation = demo.generation, context = demo.ciContext
     let surfaceHeightM = Numerics.percentile(demo.spots.map(\.surfaceHeightM), 0.5) ?? PipelineConfig.Probe().fallbackSurfaceHeightM
 
-    func finish(_ result: Result<[FoodItem], Error>) {
+    func finish(_ result: Result<[FoodItem], Error>, dish: [(String, Double)] = [], saved: String? = nil) {
       DispatchQueue.main.async { [weak self] in
         guard let self, generation == self.demo.generation else { return }
+        self.demo.food.dish = dish; self.demo.food.saved = saved; self.demo.food.savedCount = FoodScanLog.count
         switch result {
         case .success(let items):
-          self.demo.food = FoodState(phase: .done, items: items)
+          self.demo.food.phase = .done; self.demo.food.items = items
           self.emit(items.isEmpty ? "No food found on the plate." : "Found \(items.count) item\(items.count == 1 ? "" : "s").")
         case .failure(let error):
-          self.demo.food = FoodState(phase: .failed, error: "\(error)")
+          self.demo.food.phase = .failed; self.demo.food.error = "\(error)"
           self.emit("Food identification failed: \(error)")
         }
         self.drawDemo()
@@ -106,10 +135,42 @@ extension TareCaptureView {
       }
     }
 
+    func lift(_ point: SIMD2<Double>, _ crop: ImageCrop) -> FoodPoint? {
+      FoodPointLifter.lift(crop.sensorPixel(normalized: point), keyframe: photo.keyframe,
+                           rim: rim, tablePlane: table, surfaceHeightM: surfaceHeightM)
+    }
+
     demo.queue.async {
       guard let crop = ImageCrop.around(rim, tablePlane: table, in: photo.keyframe, margin: 1.15, rotatedClockwise: true),
-            let upload = Self.uprightCropJPEG(photo.jpeg, crop: crop, maxSidePx: 1092, context: context) else {
+            let upright = Self.uprightCrop(photo.jpeg, crop: crop, maxSidePx: 1092) else {
         return finish(.failure(RimTapException("The plate is not inside the overhead photo.")))
+      }
+      if let classifier {
+        // Bare plate is expected between 78% and 90% of the rim radius; food is searched inside 90%.
+        guard let interior = crop.outline(of: rim, tablePlane: table, in: photo.keyframe, scale: 0.9, atHeightM: surfaceHeightM),
+              let ring = crop.outline(of: rim, tablePlane: table, in: photo.keyframe, scale: 0.78, atHeightM: surfaceHeightM),
+              let image = context.createCGImage(upright, from: upright.extent) else {
+          return finish(.failure(RimTapException("The plate is not inside the overhead photo.")))
+        }
+        do {
+          let scan = try classifier.identify(image, interior: interior, ring: ring, context: context)
+          let saved = FoodScanLog.save(frameJPEG: photo.jpeg, plate: image, scan: scan, info: [
+            "model": "FoodClassifier \(classifier.version)", "tiltDeg": photo.tiltDeg,
+            "rimDiameterMm": rim.radiusM * 2000, "surfaceHeightMm": surfaceHeightM * 1000])
+          let items = scan.items.enumerated().compactMap { index, result -> FoodItem? in
+            let points = result.points.compactMap { lift($0, crop) }
+            guard !points.isEmpty else { return nil }
+            return FoodItem(label: result.label, category: result.category, confidence: result.confidence, colorIndex: index,
+                            points: points, alternatives: result.topK.dropFirst().map(\.0))
+          }
+          finish(.success(items), dish: scan.dish, saved: saved)
+        } catch {
+          finish(.failure(error))
+        }
+        return
+      }
+      guard let url, let upload = Self.jpeg(upright, context: context) else {
+        return finish(.failure(RimTapException("Could not encode the plate photo.")))
       }
       var request = URLRequest(url: url, timeoutInterval: 90)
       request.httpMethod = "POST"
@@ -130,9 +191,7 @@ extension TareCaptureView {
         }
         let lifted = items.enumerated().compactMap { index, item -> FoodItem? in
           let points = (item["points"] as? [[Double]] ?? []).compactMap { p -> FoodPoint? in
-            guard p.count == 2 else { return nil }
-            return FoodPointLifter.lift(crop.sensorPixel(normalized: SIMD2(p[0], p[1])), keyframe: photo.keyframe,
-                                        rim: rim, tablePlane: table, surfaceHeightM: surfaceHeightM)
+            p.count == 2 ? lift(SIMD2(p[0], p[1]), crop) : nil
           }
           guard !points.isEmpty else { return nil }
           return FoodItem(label: item["label"] as? String ?? "food", category: item["category"] as? String ?? "other",
@@ -143,16 +202,20 @@ extension TareCaptureView {
     }
   }
 
-  /// Crops the sensor-orientation JPEG, rotates it upright and scales it for upload.
-  static func uprightCropJPEG(_ jpeg: Data, crop: ImageCrop, maxSidePx: Double, context: CIContext) -> Data? {
+  /// Crops the sensor-orientation JPEG, rotates it upright and scales it down.
+  static func uprightCrop(_ jpeg: Data, crop: ImageCrop, maxSidePx: Double) -> CIImage? {
     guard let source = CGImageSourceCreateWithData(jpeg as CFData, nil),
           let full = CGImageSourceCreateImageAtIndex(source, 0, nil),
-          let cropped = full.cropping(to: CGRect(x: crop.x0Px, y: crop.y0Px, width: crop.widthPx, height: crop.heightPx)),
-          let color = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+          let cropped = full.cropping(to: CGRect(x: crop.x0Px, y: crop.y0Px, width: crop.widthPx, height: crop.heightPx)) else { return nil }
     var image = CIImage(cgImage: cropped)
     if crop.rotatedClockwise { image = image.oriented(.right) }
     let scale = min(1, maxSidePx / max(image.extent.width, image.extent.height))
     image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    return image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+  }
+
+  static func jpeg(_ image: CIImage, context: CIContext) -> Data? {
+    guard let color = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
     return context.jpegRepresentation(of: image, colorSpace: color,
       options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.88])
   }

@@ -52,7 +52,7 @@ class SfmResult:
     dense_workspace_dir: Path
 
 
-def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmResult:
+def run_sfm_and_undistort(session: Session, reporter: ProgressReporter, options=None) -> SfmResult:
     images_dir = session.photos_dir
     photo_count = session.photo_count()
     if photo_count < MIN_PHOTOS_FOR_SFM:
@@ -68,8 +68,16 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     session.output_dir.mkdir(exist_ok=True)
     if (session.root / 'arkit.json').exists():
         from .arkit_pipeline import run_known_poses
-        return run_known_poses(session, reporter)
+        return run_known_poses(session, reporter, options)
 
+    if options and options.max_frames:
+        raise PipelineError('Pose-based keyframe selection requires a native ARKit recording')
+    use_gpu = '0'
+    if options and options.feature_device != 'cpu':
+        supported = dense_stereo_available()
+        if options.feature_device == 'cuda' and not supported:
+            raise PipelineError('The configured COLMAP CLI does not support CUDA')
+        use_gpu = '1' if supported else '0'
     db_path = work / "database.db"
     sparse_dir = work / "sparse"
     sparse_dir.mkdir()
@@ -84,7 +92,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
         "--image_path", str(images_dir),
         "--ImageReader.single_camera", "1",
         "--ImageReader.camera_model", "SIMPLE_RADIAL",
-        f"--{extraction_options}.use_gpu", "0",
+        f"--{extraction_options}.use_gpu", use_gpu,
         f"--{extraction_options}.num_threads", num_threads,
     ], "Feature extraction")
 
@@ -99,7 +107,7 @@ def run_sfm_and_undistort(session: Session, reporter: ProgressReporter) -> SfmRe
     run([
         config.COLMAP_BIN, "sequential_matcher",
         "--database_path", str(db_path),
-        f"--{matching_options}.use_gpu", "0",
+        f"--{matching_options}.use_gpu", use_gpu,
         f"--{matching_options}.num_threads", num_threads,
         "--SequentialMatching.overlap", "15",
     ], "Feature matching")

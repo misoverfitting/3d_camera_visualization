@@ -52,6 +52,11 @@ public struct EdgeRimFitter {
     guard views.count >= config.minViews else { return .failure(.insufficientViews) }
     let frame = PlaneFrame(tablePlane)
     let seed = frame.coordinates(seedWorld)
+    let cameraPositions = views.map { frame.coordinates($0.keyframe.cameraCenterWorld) }
+    let baseline = cameraPositions.enumerated().flatMap { i, point in
+      cameraPositions.dropFirst(i + 1).map { simd_distance(point, $0) }
+    }.max() ?? 0
+    guard baseline >= config.minBaselineM else { return .failure(.insufficientBaseline) }
     let prepared = views.map { PreparedView($0, config: config, frame: frame) }
     guard let coarse = vote(prepared, frame: frame, seed: seed) else { return .failure(.insufficientKeypoints) }
     let refined = refine(prepared, frame: frame, from: coarse.params)
@@ -176,7 +181,9 @@ public struct EdgeRimFitter {
     }
     let result = Numerics.nelderMead(initial: initial, steps: [0.003, 0.003, 0.003, 0.003], maxEvaluations: 300) { p in
       guard abs(p[0] - initial[0]) <= window, abs(p[1] - initial[1]) <= window,
-            abs(p[2] - initial[2]) <= window, abs(p[3] - initial[3]) <= window, p[2] > 0, p[3] >= 0 else { return 1 }
+            abs(p[2] - initial[2]) <= window, abs(p[3] - initial[3]) <= window,
+            p[2] >= config.minRadiusM, p[2] <= config.maxRadiusM,
+            p[3] >= 0, p[3] <= config.maxHeightM else { return 1 }
       return -support(p)
     }
     let refinedSupport = -result.value

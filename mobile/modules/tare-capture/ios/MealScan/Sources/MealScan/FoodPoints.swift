@@ -41,6 +41,28 @@ public struct ImageCrop: Sendable {
     }
     return edge - 0.5
   }
+
+  /// Inverse of `sensorPixel(normalized:)`.
+  public func normalized(sensorPixel s: SIMD2<Double>) -> SIMD2<Double> {
+    let edge = s + 0.5
+    if rotatedClockwise {
+      return SIMD2(1 - (edge.y - y0Px) / heightPx, (edge.x - x0Px) / widthPx)
+    }
+    return SIMD2((edge.x - x0Px) / widthPx, (edge.y - y0Px) / heightPx)
+  }
+
+  /// The rim circle scaled by `scale` (e.g. 0.9 for just inside the rim), as a polygon in
+  /// this crop's normalized coordinates. Nil if any of it is behind the camera.
+  public func outline(of rim: RimEstimate, tablePlane: Plane, in keyframe: Keyframe, scale: Double = 1,
+                      atHeightM heightM: Double? = nil, count: Int = 64) -> [SIMD2<Double>]? {
+    let frame = PlaneFrame(tablePlane), center = frame.coordinates(rim.centerWorld)
+    let points = (0..<count).compactMap { i -> SIMD2<Double>? in
+      let a = 2 * .pi * Double(i) / Double(count)
+      return keyframe.projectPx(frame.world(center + scale * rim.radiusM * SIMD2(cos(a), sin(a)), heightM: heightM ?? rim.heightM))
+        .map { normalized(sensorPixel: $0) }
+    }
+    return points.count == count ? points : nil
+  }
 }
 
 public struct FoodPoint: Sendable {

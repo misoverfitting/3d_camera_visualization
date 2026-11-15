@@ -1,8 +1,33 @@
 {
-  "cli": { "version": ">= 16.0.0", "appVersionSource": "remote" },
-  "build": {
-    "preview": { "distribution": "internal", "ios": { "simulator": false, "scheme": "TareCapture" } },
-    "production": { "autoIncrement": true, "ios": { "scheme": "TareCapture" } }
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
   },
-  "submit": { "production": { "ios": { "ascAppId": "6824637632" } } }
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "ios": {
+        "simulator": false,
+        "scheme": "TareCapture"
+      },
+      "autoIncrement": true
+    },
+    "production": {
+      "autoIncrement": true,
+      "ios": {
+        "scheme": "TareCapture"
+      },
+      "distribution": "store",
+      "env": {
+        "TARE_BUNDLE_ID": "com.tare.capture"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6824637632"
+      }
+    }
+  }
 }

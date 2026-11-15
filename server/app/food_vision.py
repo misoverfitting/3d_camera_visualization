@@ -7,18 +7,27 @@ coordinates, origin top-left), which the app lifts into 3D as probe points.
 from __future__ import annotations
 
 import base64
+import json
 import os
+import uuid
+from datetime import datetime, timezone
 from typing import Literal
 
 import anthropic
 from fastapi import APIRouter, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from .config import DATA_DIR
+
 MODEL = os.environ.get("FOOD_VISION_MODEL", "claude-opus-5-5")
 EFFORT = os.environ.get("FOOD_VISION_EFFORT", "medium")
 # Optional shared secret so the deployed proxy is not an open Claude endpoint.
 API_TOKEN = os.environ.get("TARE_API_TOKEN")
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# Keep each uploaded plate photo and its labels for the training set (ml/autolabel
+# ingests this folder). Off by default: production use needs consent (tare_impl.md Q5).
+SAVE_UPLOADS = os.environ.get("FOOD_SAVE_UPLOADS") == "1"
+UPLOADS_DIR = DATA_DIR / "food_uploads"
 
 Category = Literal["protein", "starch", "vegetable", "fruit", "dairy", "sauce", "dessert", "drink", "other"]
 
@@ -118,7 +127,7 @@ def identify_food(image: UploadFile, x_tare_token: str | None = Header(default=N
     if not jpeg.startswith(b"\xff\xd8"):
         raise HTTPException(400, "Expected a JPEG image")
     try:
-        return identify(jpeg)
+        result = identify(jpeg)
     except anthropic.AuthenticationError as exc:
         raise HTTPException(503, "Food vision is not configured on the server") from exc
     except anthropic.RateLimitError as exc:
@@ -127,3 +136,15 @@ def identify_food(image: UploadFile, x_tare_token: str | None = Header(default=N
         raise HTTPException(502, f"Food vision failed ({exc.status_code})") from exc
     except anthropic.APIConnectionError as exc:
         raise HTTPException(502, "Could not reach the food vision service") from exc
+    if SAVE_UPLOADS:
+        save_upload(jpeg, result)
+    return result
+
+
+def save_upload(jpeg: bytes, result: dict) -> None:
+    now = datetime.now(timezone.utc)
+    folder = UPLOADS_DIR / now.strftime("%Y-%m-%d")
+    folder.mkdir(parents=True, exist_ok=True)
+    name = f"{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    (folder / f"{name}.jpg").write_bytes(jpeg)
+    (folder / f"{name}.json").write_text(json.dumps(result, indent=1))

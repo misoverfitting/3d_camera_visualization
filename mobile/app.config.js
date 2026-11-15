@@ -10,6 +10,9 @@ const localHttp = apiUrl && apiUrl.startsWith('http://');
 
 module.exports = ({ config }) => ({
   ...config,
+  icon: './assets/brand/icon.png',
+  backgroundColor: '#D3D1CD',
+  splash: { image: './assets/brand/icon.png', resizeMode: 'contain', backgroundColor: '#D3D1CD' },
   ios: {
     ...config.ios,
     bundleIdentifier: process.env.TARE_BUNDLE_ID || config.ios.bundleIdentifier,

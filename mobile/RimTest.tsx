@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Button, Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { Image, Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { brand, Button } from './Brand';
 import { requireNativeModule } from 'expo-modules-core';
 
 // Temporary "tap the rim" test: stands in for the rim detector so the two-view rim
@@ -69,7 +70,7 @@ export default function RimTest({ disabled }: { disabled: boolean }) {
       </View>;
     })}
     <View style={styles.row}>
-      <Text>True diameter (optional):</Text>
+      <Text style={styles.copy}>True diameter (optional):</Text>
       <TextInput style={styles.input} value={ruler} onChangeText={setRuler} placeholder="mm" keyboardType="decimal-pad" />
     </View>
     <View style={styles.row}>
@@ -131,7 +132,7 @@ function TapEditor({ shot, title, points, onChange, onDone }:
           <Image source={{ uri: shot.uri }} style={{ width, height: displayHeight }} />
           {points.map(([x, y], i) => <View key={i} pointerEvents="none" style={{
             position: 'absolute', left: (x + 0.5) / scale - dot / 2, top: (y + 0.5) / scale - dot / 2,
-            width: dot, height: dot, borderRadius: dot / 2, borderWidth: 1.5 / zoom, borderColor: '#ff2d55',
+            width: dot, height: dot, borderRadius: dot / 2, borderWidth: 1.5 / zoom, borderColor: brand.accent,
           }} />)}
         </Pressable>
       </ScrollView>
@@ -145,13 +146,13 @@ function TapEditor({ shot, title, points, onChange, onDone }:
 }
 
 const styles = StyleSheet.create({
-  copy: { paddingVertical: 6, color: '#333' },
-  small: { color: '#333', flexShrink: 1 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 2 },
-  input: { borderWidth: 1, borderColor: '#bbb', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, minWidth: 80, backgroundColor: '#fff' },
-  error: { color: '#b00020', paddingVertical: 6 },
+  copy: { paddingVertical: 6, color: brand.body, fontFamily: brand.sans },
+  small: { color: brand.body, fontFamily: brand.sans, flexShrink: 1 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingVertical: 2 },
+  input: { borderWidth: 1, borderColor: brand.line, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, minWidth: 80, backgroundColor: brand.panel, fontFamily: brand.sans, color: brand.ink },
+  error: { color: brand.danger, fontFamily: brand.sans, paddingVertical: 6 },
   result: { paddingVertical: 6, gap: 2 },
-  headline: { fontWeight: '600', color: '#111' },
-  editor: { flex: 1, backgroundColor: '#000' },
-  editorTitle: { color: '#fff', padding: 12 },
+  headline: { fontWeight: '600', color: brand.ink, fontFamily: brand.sans },
+  editor: { flex: 1, backgroundColor: brand.ink },
+  editorTitle: { color: brand.background, fontFamily: brand.sans, padding: 12 },
 });
