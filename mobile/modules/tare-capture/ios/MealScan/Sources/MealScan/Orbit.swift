@@ -13,6 +13,9 @@ public struct OrbitSelector {
   /// Unit directions from the target to each accepted camera.
   public private(set) var directions: [SIMD3<Double>] = []
   private var cells = Set<Int>()
+  private var cellIndices: [Int: Int] = [:]
+  /// A tentative refresh of an occupied cell; the caller commits only if the image is sharper.
+  public private(set) var replacementIndex: Int?
 
   public init(targetWorld: SIMD3<Double>, tablePlane: Plane, config: PipelineConfig.Orbit = .init()) {
     self.targetWorld = targetWorld; self.tablePlane = tablePlane; self.config = config
@@ -23,8 +26,30 @@ public struct OrbitSelector {
     Double(cells.count) / Double(config.azimuthBins * (config.elevationBandsDeg.count - 1))
   }
 
+  public var isFull: Bool { directions.count >= min(config.maxKeyframes, config.azimuthBins * (config.elevationBandsDeg.count - 1)) }
+
+  /// Occupied cells per elevation band, from low to high.
+  public var coveredCellsByBand: [Int] {
+    (0..<(config.elevationBandsDeg.count - 1)).map { band in
+      cells.filter { $0 / config.azimuthBins == band }.count
+    }
+  }
+
+  /// Low band first, each with azimuth sectors in the table frame.
+  public var coverageCells: [[Bool]] {
+    (0..<(config.elevationBandsDeg.count - 1)).map { band in
+      (0..<config.azimuthBins).map { cells.contains(band * config.azimuthBins + $0) }
+    }
+  }
+
+  public var hasEnoughViews: Bool {
+    coverage >= config.targetCoverage && coveredCellsByBand.allSatisfy { $0 >= config.minCellsPerBand }
+  }
+
   /// `angularSpeedDegS` and `speedMS` come from consecutive tracking poses.
   public mutating func consider(_ keyframe: Keyframe, angularSpeedDegS: Double, speedMS: Double) -> Rejection? {
+    replacementIndex = nil
+    guard !isFull else { return .full }
     guard keyframe.tracking == .normal else { return .trackingLimited }
     guard angularSpeedDegS <= config.maxAngularSpeedDegS, speedMS <= config.maxSpeedMS else { return .moving }
     let k = keyframe.intrinsics
@@ -37,11 +62,21 @@ public struct OrbitSelector {
     let direction = offset / distanceM
     let elevationDeg = asin(min(1, max(-1, simd_dot(direction, tablePlane.normalWorld)))) * 180 / .pi
     guard elevationDeg >= config.minElevationDeg else { return .tooLow }
+    let candidateCell = cell(direction, elevationDeg: elevationDeg)
     let minCos = cos(config.minAngleDeg * .pi / 180)
+    if let index = cellIndices[candidateCell] {
+      // A sharper look can repair a bad first frame without spending coverage capacity.
+      guard simd_dot(directions[index], direction) <= minCos,
+            !directions.enumerated().contains(where: { $0.offset != index && simd_dot($0.element, direction) > minCos })
+      else { return .redundant }
+      directions[index] = direction
+      replacementIndex = index
+      return nil
+    }
     guard !directions.contains(where: { simd_dot($0, direction) > minCos }) else { return .redundant }
-    guard directions.count < config.maxKeyframes else { return .full }
+    cellIndices[candidateCell] = directions.count
     directions.append(direction)
-    cells.insert(cell(direction, elevationDeg: elevationDeg))
+    cells.insert(candidateCell)
     return nil
   }
 

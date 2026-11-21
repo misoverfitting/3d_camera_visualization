@@ -29,15 +29,11 @@ public class TareCaptureModule: Module {
       let zip = FileManager.default.temporaryDirectory.appendingPathComponent(source.lastPathComponent + ".zip")
       if FileManager.default.fileExists(atPath: zip.path) { try FileManager.default.removeItem(at: zip) }
       try FileManager.default.zipItem(at: source, to: zip)
-      DispatchQueue.main.async {
-        guard var presenter = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
-          .flatMap({ $0.windows }).first(where: { $0.isKeyWindow })?.rootViewController else { return }
-        while let next = presenter.presentedViewController { presenter = next }
-        let sheet = UIActivityViewController(activityItems: [zip], applicationActivities: nil)
-        sheet.popoverPresentationController?.sourceView = presenter.view
-        sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: zip) }
-        presenter.present(sheet, animated: true)
-      }
+      Self.share(zip)
+    }
+    // Food ID field log (FoodScanLog.swift): every saved scan, zipped.
+    AsyncFunction("shareFoodScans") {
+      Self.share(try FoodScanLog.zip())
     }
     // Tap-the-rim test (RimTapTest.swift), acting on the mounted camera view.
     AsyncFunction("rimSnapshot") { (slot: Int) throws -> [String: Any] in
@@ -47,12 +43,12 @@ public class TareCaptureModule: Module {
       try Self.cameraView().rimMeasure(taps: taps, rulerDiameterMm: rulerDiameterMm)
     }.runOnQueue(.main)
     AsyncFunction("rimReset") { TareCaptureView.current?.rimReset() }.runOnQueue(.main)
-    // Plate demo (PlateDemo.swift): tapping the plate starts it; these end or restart it.
+    // Plate demo: select bare table, align it, then choose the plate center.
     AsyncFunction("demoFinish") { TareCaptureView.current?.demoFinish() }.runOnQueue(.main)
     AsyncFunction("demoReset") { TareCaptureView.current?.demoReset() }.runOnQueue(.main)
-    AsyncFunction("demoIdentify") { (promise: Promise) in
+    AsyncFunction("demoIdentify") { (source: String, promise: Promise) in
       guard let view = TareCaptureView.current else { return promise.reject(RimTapException("The camera is not open.")) }
-      view.demoIdentify { result in
+      view.demoIdentify(onDevice: source != "claude") { result in
         switch result {
         case .success(let status): promise.resolve(status)
         case .failure(let error): promise.reject(error)
@@ -60,6 +56,7 @@ public class TareCaptureModule: Module {
       }
     }.runOnQueue(.main)
     AsyncFunction("demoProbe") { TareCaptureView.current?.demoProbe() }.runOnQueue(.main)
+    AsyncFunction("demoAdjustTable") { (deltaMm: Double) in TareCaptureView.current?.demoAdjustTable(deltaMm) }.runOnQueue(.main)
     AsyncFunction("demoNudge") { (deltaMm: Double) in TareCaptureView.current?.demoNudge(deltaMm) }.runOnQueue(.main)
     View(TareCaptureView.self) {
       Events("onStatus")
@@ -76,6 +73,19 @@ public class TareCaptureModule: Module {
 enum CaptureError: Error { case invalidRecording, imageEncoding }
 
 extension TareCaptureModule {
+  /// Presents the share sheet for a file and deletes it afterwards.
+  static func share(_ file: URL) {
+    DispatchQueue.main.async {
+      guard var presenter = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        .flatMap({ $0.windows }).first(where: { $0.isKeyWindow })?.rootViewController else { return }
+      while let next = presenter.presentedViewController { presenter = next }
+      let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+      sheet.popoverPresentationController?.sourceView = presenter.view
+      sheet.completionWithItemsHandler = { _, _, _, _ in try? FileManager.default.removeItem(at: file) }
+      presenter.present(sheet, animated: true)
+    }
+  }
+
   static func cameraView() throws -> TareCaptureView {
     guard let view = TareCaptureView.current else { throw RimTapException("The camera is not open.") }
     return view
@@ -122,6 +132,8 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
   private let tracker = TareFeatureTracker(downscale: 2)
   private let cloudNode = SCNNode()
   private var depthMode: DepthMode = DepthMode.lidarSupported ? .lidar : .multiView
+  // Cross-file capture extensions can inspect the source without changing it.
+  var usesMeasuredSurfaceDepth: Bool { depthMode == .lidar }
   private var depthBusy = false
   private var depthGeneration = 0 // Bumped on every clear so in-flight results cannot repaint old points.
   private var trackerStale = false
@@ -218,7 +230,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
     // The demo shows only the plate, rim and spots; depth keeps fusing for spot heights.
     cloudNode.isHidden = value
     preview.debugOptions = value ? [] : [.showFeaturePoints]
-    emit(value ? "Tap the middle of the plate to start." : "Tap a cyan surface near the object to place the scan box.")
+    emit(value ? "First tap bare table beside the plate to set its height." : "Tap a cyan surface near the object to place the scan box.")
   }
   func setForceMultiView(_ value: Bool) {
     let mode: DepthMode = value || !DepthMode.lidarSupported ? .multiView : .lidar
@@ -452,7 +464,7 @@ final class TareCaptureView: ExpoView, ARSessionDelegate, ARSCNViewDelegate {
       horizontalPlanes = horizontalIDs.count
       verticalPlanes = planes.filter { $0.alignment == .vertical }.count
       featurePoints = frame.rawFeaturePoints?.points.count ?? 0
-      let needsCoaching = horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
+      let needsCoaching = (!demo.enabled || demo.table == nil) && horizontalIDs.isEmpty && region == nil && !captureWithoutBox && !recording && !finishing
       if coaching.isActive != needsCoaching { coaching.setActive(needsCoaching, animated: true) }
       let message: String
       if demo.enabled { message = demoMessage(tracking: tracking, planes: horizontalPlanes) }

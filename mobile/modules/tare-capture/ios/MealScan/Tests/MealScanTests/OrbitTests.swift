@@ -104,6 +104,16 @@ final class OrbitTests: XCTestCase {
     }
   }
 
+  func testEdgeFitRejectsVerticalOnlyCameraTravelBeforeEstimatingHeight() {
+    let views = (0..<4).map { i in
+      let frame = Synthetic.keyframe(id: i, offset: SIMD3(0.02, 0, 0.03), heightM: 0.3 + Double(i) * 0.05, intrinsics: Self.small)
+      return EdgeView(keyframe: frame, image: GrayImage(widthPx: 480, heightPx: 360, pixels: .init(repeating: 0, count: 480 * 360)))
+    }
+    guard case .failure(.insufficientBaseline) = EdgeRimFitter().fit(views, tablePlane: Synthetic.table, seedWorld: Synthetic.dishCenter) else {
+      return XCTFail("An orbit needs horizontal travel before reporting a rim height")
+    }
+  }
+
   func testOrbitSelectorSpreadsKeyframesAndTracksCoverage() {
     var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
     let views = Self.orbit()
@@ -116,6 +126,79 @@ final class OrbitTests: XCTestCase {
     let away = Keyframe(id: 99, timestampS: 0, intrinsics: Self.small, worldFromCamera: Synthetic.pose(
       eye: Synthetic.dishCenter + SIMD3(0, 0.4, 0.2), target: Synthetic.dishCenter + SIMD3(0, 0.4, 1)))
     XCTAssertEqual(selector.consider(away, angularSpeedDegS: 0, speedMS: 0), .outOfFrame)
+  }
+
+  private func orbitView(azimuth: Double, elevation: Double, id: Int = 0) -> Keyframe {
+    let a = azimuth * .pi / 180, e = elevation * .pi / 180
+    let offset = 0.4 * SIMD3(cos(e) * cos(a), sin(e), cos(e) * sin(a))
+    return Keyframe(id: id, timestampS: Double(id), intrinsics: Self.small,
+                    worldFromCamera: Synthetic.pose(eye: Synthetic.dishCenter + offset, target: Synthetic.dishCenter))
+  }
+
+  func testLocalSweepsCannotSpendBudgetOnOccupiedCells() {
+    var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
+    XCTAssertNil(selector.consider(orbitView(azimuth: 5, elevation: 20), angularSpeedDegS: 0, speedMS: 0))
+    // More than 8 degrees away, but still the same cell.
+    var refresh = selector
+    XCTAssertNil(refresh.consider(orbitView(azimuth: 20, elevation: 20), angularSpeedDegS: 0, speedMS: 0))
+    XCTAssertEqual(refresh.replacementIndex, 0)
+    XCTAssertEqual(refresh.coverage, selector.coverage)
+    XCTAssertEqual(refresh.directions.count, 1)
+    // Discard a refresh when its image is not sharper, as the capture layer does.
+    XCTAssertEqual(selector.directions.count, 1)
+    for _ in 0..<40 {
+      refresh = selector
+      _ = refresh.consider(orbitView(azimuth: 20, elevation: 30), angularSpeedDegS: 0, speedMS: 0)
+    }
+    XCTAssertEqual(selector.directions.count, 1)
+    XCTAssertNil(selector.consider(orbitView(azimuth: 50, elevation: 30), angularSpeedDegS: 0, speedMS: 0))
+  }
+
+  func testHighOrbitNeedsLowerViewsToComplete() {
+    var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
+    for i in 0..<12 {
+      XCTAssertNil(selector.consider(orbitView(azimuth: Double(i) * 30 + 15, elevation: 60), angularSpeedDegS: 0, speedMS: 0))
+    }
+    XCTAssertEqual(selector.coverage, 0.5, accuracy: 1e-9)
+    XCTAssertEqual(selector.coveredCellsByBand, [0, 12])
+    XCTAssertFalse(selector.hasEnoughViews)
+    for i in 0..<4 {
+      XCTAssertNil(selector.consider(orbitView(azimuth: Double(i) * 30 + 15, elevation: 30), angularSpeedDegS: 0, speedMS: 0))
+    }
+    XCTAssertTrue(selector.hasEnoughViews)
+  }
+
+  func testCrossingBandBoundaryStillRequiresAngularSeparation() {
+    var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
+    XCTAssertNil(selector.consider(orbitView(azimuth: 15, elevation: 44), angularSpeedDegS: 0, speedMS: 0))
+    XCTAssertEqual(selector.consider(orbitView(azimuth: 15, elevation: 46), angularSpeedDegS: 0, speedMS: 0), .redundant)
+    XCTAssertNil(selector.consider(orbitView(azimuth: 15, elevation: 60), angularSpeedDegS: 0, speedMS: 0))
+    XCTAssertEqual(selector.coveredCellsByBand, [1, 1])
+  }
+
+  func testCapacityIsReportedEvenForRedundantOrMovingPose() {
+    var config = PipelineConfig.Orbit()
+    config.maxKeyframes = 1
+    var selector = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table, config: config)
+    let view = orbitView(azimuth: 15, elevation: 30)
+    XCTAssertNil(selector.consider(view, angularSpeedDegS: 0, speedMS: 0))
+    XCTAssertTrue(selector.isFull)
+    XCTAssertEqual(selector.consider(view, angularSpeedDegS: 90, speedMS: 1), .full)
+  }
+
+  func testDiscardedImageReservationDoesNotConsumeCoverage() {
+    var committed = OrbitSelector(targetWorld: Synthetic.dishCenter, tablePlane: Synthetic.table)
+    let view = orbitView(azimuth: 15, elevation: 30)
+    var tentative = committed
+    XCTAssertNil(tentative.consider(view, angularSpeedDegS: 0, speedMS: 0))
+    // The image failed: leave committed untouched. The same candidate remains eligible.
+    XCTAssertEqual(committed.coverage, 0)
+    XCTAssertTrue(committed.directions.isEmpty)
+    tentative = committed
+    XCTAssertNil(tentative.consider(view, angularSpeedDegS: 0, speedMS: 0))
+    committed = tentative  // Successful image build.
+    XCTAssertEqual(committed.coverage, 1.0 / 24, accuracy: 1e-9)
+    XCTAssertEqual(committed.directions.count, 1)
   }
 
   func testProbeSpotsSitInsideRimOnTheSurface() {

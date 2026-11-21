@@ -3,7 +3,9 @@
     "name": "Tare Capture",
     "slug": "tare-capture",
     "version": "0.1.0",
-    "platforms": ["ios"],
+    "platforms": [
+      "ios"
+    ],
     "orientation": "portrait",
     "ios": {
       "supportsTablet": false,
@@ -17,6 +19,12 @@
     },
     "plugins": [
       "./plugins/withPodDeploymentTarget"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "0101e44e-39da-4dbe-ab87-80eb00587ff9"
+      }
+    },
+    "owner": "misoverfitting"
   }
 }

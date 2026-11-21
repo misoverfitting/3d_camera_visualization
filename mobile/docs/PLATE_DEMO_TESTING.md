@@ -1,9 +1,105 @@
 # Testing the plate demo
 
+## Non-LiDAR placement fix (CAPTURE / 03)
+
+The first tap now selects **bare table beside the plate** using an existing plane's
+observed geometry. Estimated-plane and infinite-plane hits cannot establish the
+support plane. The second tap chooses the plate center by intersecting its camera
+ray with that same table plane. It never starts a new plane search through food.
+
+1. On a non-LiDAR phone, point at a textured patch of bare table and move sideways
+   until ARKit observes it. Tap it: a flat yellow marker should lie on the table.
+2. Look from a lower angle. If the marker is above/below the table, use **Surface
+   down 5 mm / Surface up 5 mm** before tapping the plate center. This adjusts the
+   selected support plane and the eventual center/rim/points together, not just
+   the probe overlays. Adjustments are disabled once capture starts; Restart is
+   available during setup. The adjustment is bounded to +/-100 mm.
+3. Tap the plate center. Its marker must stay on the selected plane even when
+   food or another ARKit plane lies above it. Move the camera sideways by at least
+   8 cm before expecting a rim-height estimate. Rotating or raising the phone in
+   place must not produce a supposedly measured rim height.
+4. Complete a scan. Non-LiDAR generic probe points use the estimated plate floor
+   (up to 8 mm above the selected table), never the unverified multi-view cloud.
+   These heights are estimates, not measurements of food thickness. On LiDAR,
+   surface heights use repeatedly observed points; high food measurements cannot
+   lift all unmeasured ring spots above the rim.
+5. Test Restart after selecting the table and after adjusting its height. Both
+   must remove the old marker, selected plane, adjustment, views and food state.
+6. Repeat on two table heights and with food covering the plate center. Check the
+   yellow marker, rim and generic probe dots separately from a side view.
+
+The existing **Points down / up** controls still adjust probe visualization only;
+they are not a substitute for the setup-time surface alignment controls.
+
+Regression coverage: `SupportPlacementTests` checks selection on a known table
+despite an elevated alternative, height correction along the original camera ray,
+invalid intersections and height borrowing. `OrbitTests` rejects vertical-only
+travel before height fitting. Native Swift tests still require a Mac; browser
+checks cover the setup UI and the adjustment-to-native call, not ARKit accuracy.
+
+## Follow-up for inaccurate outlines / coverage near 54%
+
+- Capture image preparation and rim fitting now run on separate queues. Test that
+  coverage and guidance keep updating while a fit is running.
+- Camera luma is area-resampled at its actual aspect ratio, including 1920×1440,
+  1280×720 and 640×480 inputs. Intrinsics scale to the resulting image dimensions.
+  `LumaResamplerTests` covers row padding, fractional scaling and constant images.
+- An occupied cell can propose a replacement after at least 8 degrees of movement.
+  It commits only when the replacement's Laplacian variance is over 10% higher.
+  The view count and coverage do not increase for replacements. This repairs a
+  poor first image without silently inflating coverage.
+- The food photo is selected independently from occupied cells, only in normal
+  tracking with slow motion. Images must improve overhead tilt by at least two
+  degrees to avoid encoding every tiny change. No ARFrame is retained by a fit job.
+- The initial target is projected onto the support plane. Further taps cannot move
+  only the fitter's seed while leaving the coverage target behind. Restart to recenter.
+- Surface coaching must disappear after plate selection, including estimated-plane
+  starts without a persistent plane anchor.
+- Coverage remains the fraction of the original 24 cells. High/lower counts and
+  occupied-cell strips explain why a high-only orbit cannot reach full coverage.
+  The strips use table-frame azimuth; they are not a phone-relative navigation map.
+- Finish and Restart stay visible. A failed/weak fit is not ready for food ID.
+  For a supported finished fit, the user must select **Use this plate & identify food**
+  after checking the outline. Test a wrong outline: food ID must not start automatically.
+- `preview` builds auto-increment their iOS build number. The header also shows
+  `CAPTURE / 02` to distinguish this UI revision. Rebuild native iOS to test these changes.
+
+Windows validation: TypeScript passed; an iOS JavaScript/assets export passed with
+bytecode disabled for the local packaging check. Default local Hermes export was
+blocked writing its temporary bytecode file by the Windows sandbox. Production
+Hermes remains enabled. Browser layout checks used the actual React components,
+fonts and assets with a camera/native-module stub at 390×844 and 320×568, with no
+browser exceptions. Native Swift tests and on-device capture are not run on Windows.
+The edge-based detector still needs phone validation; these changes do not establish
+that its outline is accurate on every plate.
+
+## Coverage regression checks (performance branch)
+
+The UI still calls progress coverage. Each occupied cell now keeps one successfully
+built image. Automatic completion requires at least 60% coverage, at least four cells
+in each elevation band, and a rim fit with edge support at least 0.3. These support
+and diversity thresholds are initial values to validate on a physical phone.
+
+- Orbit only from above 45 degrees: coverage should stop at or below 50%, with guidance
+  to lower the phone and move around the plate. Turning in place should not add coverage.
+- Sweep the same side repeatedly: views should not increase for already occupied cells.
+  Move to a new side and confirm coverage resumes, then include lower views (15–45 degrees).
+- Complete a mixed-elevation orbit: a supported fit should finish automatically without
+  waiting for 18 images. A weak fit should continue collecting missing viewpoints.
+- Tap Finish while an image is being built: the final fit must include that image if
+  conversion succeeds. Reset during capture/fitting and confirm old callbacks do not
+  change the new scan's state.
+- Inspect native status: `coveredCellsByBand` is low-to-high, `rejections` counts selector
+  rejection reasons, and `imageBuildFailures` reports unusable camera buffers. A failed
+  build must leave coverage and the committed view count unchanged.
+- On a Mac, run `swift test` from `mobile/modules/tare-capture/ios/MealScan`; the orbit
+  regressions cover repeated cells, high-only capture, band boundaries, capacity and
+  discarded image reservations. ARKit callback/reset/Finish checks require the phone.
+
 How to build, run and check the plate demo on `feat/plate-demo`:
 - tap a plate and circle it;
 - the rim is found automatically;
-- Claude labels each food item;
+- the phone finds and labels each food item, with no network;
 - 2–3 colored points land on each item.
 
 It also covers the "Rim taps" test mode and the automated tests.
@@ -60,6 +156,8 @@ In practice the error is under 1 mm.
 `--noconftest` skips `server/tests/conftest.py`, which imports the reconstruction pipeline and its heavy dependencies (open3d, pycolmap). Drop the flag if your environment already has `requirements.txt` installed.
 
 ## Start the backend
+
+**Not needed any more.** Food ID now runs on the phone (see [Food labelling](#6-food-labelling)). The backend below is the legacy Claude path, kept until it is removed.
 
 The phone never holds the Anthropic key. It posts a cropped JPEG to `POST /api/food/identify`, implemented in `server/app/food_vision.py`, and the server calls Claude.
 
@@ -274,22 +372,39 @@ The scan finishes on its own at 60% coverage with at least 18 views, or press **
 
 ### 6. Food labelling
 
-Labelling starts automatically about a second after the ring turns green ("Identifying the food…"), and takes about 3–10 s.
+Labelling starts automatically about a second after the ring turns green ("Identifying the food…"). It runs on the phone, with no network, and should take about a second.
 
 **What happens:**
-- The app uses the most overhead photo from the orbit (under 45° from straight down), cropped to the plate with 15% margin and rotated upright.
-- The 8 ring spots are replaced by **2–3 coloured discs per item**.
-- A **floating label** in the same colour sits about 3 cm above each item and turns to face you.
-- The panel shows a **legend**: colour, label, food type, number of points, and "unsure" when Claude's confidence is under 0.6.
+- **Photo:** the app uses the most overhead photo from the orbit (under 45° from straight down), cropped to the plate with 15% margin and rotated upright.
+- **Items:** `PlateItems` marks the pixels inside the rim that differ from the bare plate (sampled in a ring just inside the rim) as food, then splits them into items.
+- **Labels:** the bundled classifier names each item from a crop with everything else dimmed. Items with the same label are merged.
+- **Dish:** the whole plate is also classified once, against the 101 Food-101 dish classes, for a dish name.
+- **On screen:**
+  - The 8 ring spots are replaced by **2–3 coloured discs per item**.
+  - A **floating label** in the item's colour sits about 3 cm above each item.
+  - The panel shows **"Looks like <dish>"** with the runner-up dishes, then a **legend**: colour, label, food type and number of points. Below 60% confidence it adds "unsure" and the next guesses.
 
 **Check:**
 - Each item's discs sit **on that item**, not on the plate or a neighbouring item.
-- Labels are plausible.
+- The dish name and item labels are plausible.
 - Items touching each other are split sensibly.
-- The **number of discs** may be lower than Claude returned. Points that would land off the plate are dropped, and an item with no remaining points disappears.
+
+**Field log (please send these):** every identification is saved to the app's Documents in `FoodScans/<date-time>/`:
+
+| File | Contents |
+| --- | --- |
+| `frame.jpg` | The full camera frame. |
+| `plate.jpg` | The upright plate crop the model ran on. |
+| `overlay.jpg` | The same crop marked up: each proposed item tinted in its colour, the bare-plate sample ring in blue, and everything outside the searched area darkened. |
+| `region-<n>.jpg`, `plate-input.jpg` | Exactly what the classifier saw for each item and for the whole plate. |
+| `scan.json` | Every prediction, with its top 3, boxes and points. |
+
+To send them, tap **Share food scans (N)** and AirDrop or save the zip. They are also in the Files app under On My iPhone → Tare Capture.
+
+A one-line note per scan of what was actually on the plate helps a lot, but isn't required. `overlay.jpg` shows whether a miss is the item-finding step (wrong regions, or the blue ring sitting on food) or the classifier (good region, wrong name).
 
 **Other controls:**
-- **Identify again** re-runs labelling on the same photo and costs another call.
+- **Identify again** re-runs labelling on the same photo and saves another scan.
 - **Restart** clears everything for a new plate.
 
 ### 7. Probe simulation
@@ -387,8 +502,12 @@ Each measurement is saved to the phone. In the Files app, open On My iPhone → 
 | Model reader, pen rig, stroke poses | `…/MealScan/GLBModel.swift`, `…/MealScan/ProbeStroke.swift` |
 | Probe animation | `mobile/modules/tare-capture/ios/ProbeSim.swift` |
 | Demo flow, AR drawing | `mobile/modules/tare-capture/ios/PlateDemo.swift` |
-| Overhead photo, upload, food points | `mobile/modules/tare-capture/ios/FoodID.swift` |
+| Overhead photo, food points | `mobile/modules/tare-capture/ios/FoodID.swift` |
+| Item finding | `…/MealScan/PlateItems.swift` |
+| On-device classifier, dish guess | `mobile/modules/tare-capture/ios/LocalFoodID.swift` |
+| Field log (`FoodScans/`) | `mobile/modules/tare-capture/ios/FoodScanLog.swift` |
+| Classifier training and export | `ml/foodclass/` (see `ml/README.md`) |
 | Rim taps mode | `mobile/modules/tare-capture/ios/RimTapTest.swift`, `mobile/RimTest.tsx` |
 | UI | `mobile/App.tsx` |
-| Backend endpoint | `server/app/food_vision.py` (`POST /api/food/identify`) |
+| Backend endpoint (legacy, unused) | `server/app/food_vision.py` (`POST /api/food/identify`) |
 | Build-time backend config | `mobile/app.config.js` (`TARE_API_URL`, `TARE_API_TOKEN`) |
