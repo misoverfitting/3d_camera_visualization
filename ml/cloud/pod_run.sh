@@ -60,8 +60,9 @@ setup() {
   if [ -d $REPO/.git ]; then git -C $REPO fetch -q origin $BRANCH && git -C $REPO checkout -q $BRANCH && git -C $REPO reset -q --hard origin/$BRANCH
   else git clone -q --branch $BRANCH https://github.com/misoverfitting/3d_camera_visualization.git $REPO; fi
   # Match torchvision to the image's torch.
-  pip install -q numpy pyarrow scipy pillow huggingface_hub hf_transfer \
-    "torchvision==$(python -c 'import torch; v = torch.__version__.split("+")[0].split("."); print(f"0.{int(v[1]) + 15}.{v[2]}")')" --no-deps
+  pip install -q --break-system-packages numpy pyarrow scipy pillow huggingface_hub hf_transfer
+  pip install -q --break-system-packages --no-deps \
+    "torchvision==$(python -c 'import torch; v = torch.__version__.split("+")[0].split("."); print(f"0.{int(v[1]) + 15}.{v[2]}")')"
   python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.get_device_name(0))"
 }
 
