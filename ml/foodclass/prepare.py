@@ -3,10 +3,13 @@
 - Food-101 (ethz/food101 parquet): whole-dish photos, used as they are.
 - FoodSeg103 (parquet with per-pixel masks): one crop per ingredient on the plate,
   padded and with everything else dimmed, exactly like the app's item crops
-  (autolabel.verify.crop, which the auto-labeled dataset uses too).
+  (crops.crop, the same crop the auto-labeled dataset uses).
 - Optionally the auto-labeled dataset's classify/<split>/<class>/ crops (our own data).
 
 Output: <out>/images/<source>/<split>/<n>.jpg and <out>/manifest.csv (path,label,source,split).
+FoodSeg103's training photos are also kept whole with their class masks
+(<out>/images/foodseg103-full/, listed in <out>/regions.csv: image,mask,class_id,label) so
+training can cut fresh crops with roughened masks every epoch (crops.app_crop).
 """
 from __future__ import annotations
 
@@ -19,12 +22,13 @@ import numpy as np
 import pyarrow.parquet as pq
 from PIL import Image
 
-from autolabel.verify import crop
+from .crops import crop
 
 from .labels import SKIP, normalize
 
 MIN_ITEM_FRACTION = 0.01  # Ingredients smaller than 1% of the photo are too small to name.
 MAX_SIDE_PX = 384
+FULL_SIDE_PX = 512
 
 
 def _save(image: Image.Image, path: Path) -> None:
@@ -61,7 +65,15 @@ def food101(root: Path, out: Path, rows: list[dict], limit: int | None) -> None:
         print(f"food101 {file.name}: {count}", flush=True)
 
 
-def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None) -> None:
+def _save_full(photo: Image.Image, classes: np.ndarray, stem: Path) -> None:
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    scale = min(1, FULL_SIDE_PX / max(photo.size))
+    size = (round(photo.width * scale), round(photo.height * scale))
+    photo.resize(size, Image.Resampling.BILINEAR).save(stem.with_suffix(".jpg"), quality=92)
+    Image.fromarray(classes.astype(np.uint8)).resize(size, Image.Resampling.NEAREST).save(stem.with_suffix(".png"))
+
+
+def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None, regions: list[dict] | None = None) -> None:
     id2label = {int(k): v for k, v in json.loads((root / "id2label.json").read_text()).items()}
     for file in sorted((root / "data").glob("*.parquet")):
         split = "train" if file.name.startswith("train") else "val"
@@ -77,6 +89,8 @@ def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None) -> No
             h, w = classes.shape
             if photo.size != (w, h):
                 photo = photo.resize((w, h))
+            stem = out / "images" / "foodseg103-full" / split / f"{file.stem}_{n}"
+            kept = False
             for class_id in np.unique(classes):
                 name = id2label.get(int(class_id), "background")
                 if name.lower() in SKIP:
@@ -84,6 +98,11 @@ def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None) -> No
                 item = classes == class_id
                 if item.mean() < MIN_ITEM_FRACTION:
                     continue
+                if regions is not None and split == "train":
+                    regions.append({"image": str(stem.with_suffix(".jpg").relative_to(out)),
+                                    "mask": str(stem.with_suffix(".png").relative_to(out)),
+                                    "class_id": int(class_id), "label": normalize(name)})
+                    kept = True
                 ys, xs = np.nonzero(item)
                 box = [xs.min() / w, ys.min() / h, (xs.max() + 1) / w, (ys.max() + 1) / h]
                 path = out / "images" / "foodseg103" / split / f"{file.stem}_{n}_{class_id}.jpg"
@@ -91,6 +110,8 @@ def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None) -> No
                     _save(crop(photo, box, item), path)
                 rows.append({"path": str(path.relative_to(out)), "label": normalize(name), "source": "foodseg103", "split": split})
                 count += 1
+            if kept and not stem.with_suffix(".png").exists():
+                _save_full(photo, classes, stem)
         print(f"foodseg103 {file.name}: {count} crops", flush=True)
 
 
@@ -108,8 +129,13 @@ def autolabeled(root: Path, out: Path, rows: list[dict]) -> None:
 def prepare(out: Path, food101_dir: Path | None, foodseg_dir: Path | None, extra: list[Path], limit: int | None = None) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
+    regions: list[dict] = []
     if foodseg_dir:
-        foodseg103(foodseg_dir, out, rows, limit)
+        foodseg103(foodseg_dir, out, rows, limit, regions)
+        with (out / "regions.csv").open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=["image", "mask", "class_id", "label"])
+            writer.writeheader()
+            writer.writerows(regions)
     if food101_dir:
         food101(food101_dir, out, rows, limit)
     for root in extra:

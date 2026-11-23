@@ -1,7 +1,7 @@
 """On-device food item classifier. See ml/README.md ("On-device classifier").
 
     python -m foodclass prepare        # Food-101 + FoodSeg103 crops (+ --extra autolabel classify/ dirs)
-    python -m foodclass train          # MobileNetV3-Large from ImageNet weights, resumable
+    python -m foodclass train          # two heads (dish / item) on an ImageNet backbone, resumable
     python -m foodclass nutrition5k    # pseudo-label Nutrition5k crops with that model, then train again
     python -m foodclass export         # Core ML, compiled into the app's Assets
 """
@@ -25,18 +25,21 @@ def main() -> None:
     p.add_argument("--extra", type=Path, nargs="*", default=[], help="autolabel export classify/ folders")
     p.add_argument("--limit", type=int)
     t = sub.add_parser("train")
-    t.add_argument("--epochs", type=int, default=6)
-    t.add_argument("--size", type=int, default=192, help="training crop size; eval and export use 224")
-    t.add_argument("--freeze", type=int, default=7, help="frozen MobileNetV3 feature blocks")
-    t.add_argument("--batch", type=int, default=96)
-    t.add_argument("--lr", type=float, default=1.5e-3)
+    t.add_argument("--epochs", type=int, default=30)
+    t.add_argument("--size", type=int, default=224)
+    t.add_argument("--arch", default="mobilenet_v3_large", help="mobilenet_v3_large, efficientnet_v2_s or convnext_tiny")
+    t.add_argument("--batch", type=int, default=128)
+    t.add_argument("--lr", type=float, default=1e-3)
     t.add_argument("--workers", type=int, default=8)
     t.add_argument("--limit", type=int)
+    t.add_argument("--no-fresh-crops", action="store_true", help="use FoodSeg103's fixed crops instead of regions.csv")
+    t.add_argument("--out", default="checkpoint.pt")
     n = sub.add_parser("nutrition5k")
     n.add_argument("--root", type=Path, default=ML / "data" / "nutrition5k")
     n.add_argument("--cli", type=Path, default=ML / "plateitems-cli")
     e = sub.add_parser("export")
     e.add_argument("--assets", type=Path, default=ASSETS)
+    e.add_argument("--checkpoint", default="checkpoint.pt")
     args = parser.parse_args()
 
     if args.command == "prepare":
@@ -45,13 +48,14 @@ def main() -> None:
                 args.foodseg if args.foodseg.exists() else None, args.extra, args.limit)
     elif args.command == "train":
         from .train import train
-        train(args.work, args.epochs, args.batch, args.lr, args.workers, args.limit, args.size, args.freeze)
+        train(args.work, args.epochs, args.batch, args.lr, args.workers, args.limit, args.size, args.arch,
+              not args.no_fresh_crops, args.out)
     elif args.command == "nutrition5k":
         from .nutrition5k import pseudo_label
         pseudo_label(args.root, args.work, args.cli)
     else:
         from .export import export
-        export(args.work, args.assets)
+        export(args.work, args.assets, checkpoint=args.checkpoint)
 
 
 if __name__ == "__main__":

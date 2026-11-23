@@ -24,7 +24,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from autolabel.verify import crop
+from .crops import crop
 
 from .train import SIZE, MEAN, STD, build_model, device
 
