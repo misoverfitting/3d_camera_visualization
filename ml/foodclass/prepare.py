@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -47,22 +48,28 @@ def _label_names(parquet: Path) -> list[str]:
     return info["info"]["features"]["label"]["names"]
 
 
-def food101(root: Path, out: Path, rows: list[dict], limit: int | None) -> None:
+def _food101_file(file: Path, names: list[str], out: Path, limit: int | None) -> list[dict]:
+    split = "train" if file.name.startswith("train") else "val"
+    table = pq.read_table(file, columns=["image", "label"])
+    rows, count = [], 0
+    for image, label in zip(table.column("image").to_pylist(), table.column("label").to_pylist()):
+        if limit and count >= limit:
+            break
+        path = out / "images" / "food101" / split / f"{file.stem}_{count}.jpg"
+        if not path.exists():
+            _save(Image.open(io.BytesIO(image["bytes"])), path)
+        rows.append({"path": str(path.relative_to(out)), "label": normalize(names[label]), "source": "food101", "split": split})
+        count += 1
+    print(f"food101 {file.name}: {count}", flush=True)
+    return rows
+
+
+def food101(root: Path, out: Path, rows: list[dict], limit: int | None, workers: int = 1) -> None:
     files = sorted((root / "data").glob("*.parquet"))
     names = _label_names(files[0])
-    for file in files:
-        split = "train" if file.name.startswith("train") else "val"
-        table = pq.read_table(file, columns=["image", "label"])
-        count = 0
-        for image, label in zip(table.column("image").to_pylist(), table.column("label").to_pylist()):
-            if limit and count >= limit:
-                break
-            path = out / "images" / "food101" / split / f"{file.stem}_{count}.jpg"
-            if not path.exists():
-                _save(Image.open(io.BytesIO(image["bytes"])), path)
-            rows.append({"path": str(path.relative_to(out)), "label": normalize(names[label]), "source": "food101", "split": split})
-            count += 1
-        print(f"food101 {file.name}: {count}", flush=True)
+    with ProcessPoolExecutor(max(1, workers)) as pool:
+        for part in pool.map(_food101_file, files, [names] * len(files), [out] * len(files), [limit] * len(files)):
+            rows += part
 
 
 def _save_full(photo: Image.Image, classes: np.ndarray, stem: Path) -> None:
@@ -73,46 +80,56 @@ def _save_full(photo: Image.Image, classes: np.ndarray, stem: Path) -> None:
     Image.fromarray(classes.astype(np.uint8)).resize(size, Image.Resampling.NEAREST).save(stem.with_suffix(".png"))
 
 
-def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None, regions: list[dict] | None = None) -> None:
+def _foodseg_file(file: Path, id2label: dict[int, str], out: Path, limit: int | None) -> tuple[list[dict], list[dict]]:
+    split = "train" if file.name.startswith("train") else "val"
+    table = pq.read_table(file, columns=["image", "label"])
+    rows, regions, count = [], [], 0
+    for n, (image, mask) in enumerate(zip(table.column("image").to_pylist(), table.column("label").to_pylist())):
+        if limit and n >= limit:
+            break
+        photo = Image.open(io.BytesIO(image["bytes"])).convert("RGB")
+        classes = np.asarray(Image.open(io.BytesIO(mask["bytes"])))
+        if classes.ndim == 3:
+            classes = classes[..., 0]
+        h, w = classes.shape
+        if photo.size != (w, h):
+            photo = photo.resize((w, h))
+        stem = out / "images" / "foodseg103-full" / split / f"{file.stem}_{n}"
+        kept = False
+        for class_id in np.unique(classes):
+            name = id2label.get(int(class_id), "background")
+            if name.lower() in SKIP:
+                continue
+            item = classes == class_id
+            if item.mean() < MIN_ITEM_FRACTION:
+                continue
+            if split == "train":
+                regions.append({"image": str(stem.with_suffix(".jpg").relative_to(out)),
+                                "mask": str(stem.with_suffix(".png").relative_to(out)),
+                                "class_id": int(class_id), "label": normalize(name)})
+                kept = True
+            ys, xs = np.nonzero(item)
+            box = [xs.min() / w, ys.min() / h, (xs.max() + 1) / w, (ys.max() + 1) / h]
+            path = out / "images" / "foodseg103" / split / f"{file.stem}_{n}_{class_id}.jpg"
+            if not path.exists():
+                _save(crop(photo, box, item), path)
+            rows.append({"path": str(path.relative_to(out)), "label": normalize(name), "source": "foodseg103", "split": split})
+            count += 1
+        if kept and not stem.with_suffix(".png").exists():
+            _save_full(photo, classes, stem)
+    print(f"foodseg103 {file.name}: {count} crops", flush=True)
+    return rows, regions
+
+
+def foodseg103(root: Path, out: Path, rows: list[dict], limit: int | None, regions: list[dict] | None = None,
+               workers: int = 1) -> None:
     id2label = {int(k): v for k, v in json.loads((root / "id2label.json").read_text()).items()}
-    for file in sorted((root / "data").glob("*.parquet")):
-        split = "train" if file.name.startswith("train") else "val"
-        table = pq.read_table(file, columns=["image", "label"])
-        count = 0
-        for n, (image, mask) in enumerate(zip(table.column("image").to_pylist(), table.column("label").to_pylist())):
-            if limit and n >= limit:
-                break
-            photo = Image.open(io.BytesIO(image["bytes"])).convert("RGB")
-            classes = np.asarray(Image.open(io.BytesIO(mask["bytes"])))
-            if classes.ndim == 3:
-                classes = classes[..., 0]
-            h, w = classes.shape
-            if photo.size != (w, h):
-                photo = photo.resize((w, h))
-            stem = out / "images" / "foodseg103-full" / split / f"{file.stem}_{n}"
-            kept = False
-            for class_id in np.unique(classes):
-                name = id2label.get(int(class_id), "background")
-                if name.lower() in SKIP:
-                    continue
-                item = classes == class_id
-                if item.mean() < MIN_ITEM_FRACTION:
-                    continue
-                if regions is not None and split == "train":
-                    regions.append({"image": str(stem.with_suffix(".jpg").relative_to(out)),
-                                    "mask": str(stem.with_suffix(".png").relative_to(out)),
-                                    "class_id": int(class_id), "label": normalize(name)})
-                    kept = True
-                ys, xs = np.nonzero(item)
-                box = [xs.min() / w, ys.min() / h, (xs.max() + 1) / w, (ys.max() + 1) / h]
-                path = out / "images" / "foodseg103" / split / f"{file.stem}_{n}_{class_id}.jpg"
-                if not path.exists():
-                    _save(crop(photo, box, item), path)
-                rows.append({"path": str(path.relative_to(out)), "label": normalize(name), "source": "foodseg103", "split": split})
-                count += 1
-            if kept and not stem.with_suffix(".png").exists():
-                _save_full(photo, classes, stem)
-        print(f"foodseg103 {file.name}: {count} crops", flush=True)
+    files = sorted((root / "data").glob("*.parquet"))
+    with ProcessPoolExecutor(max(1, workers)) as pool:
+        for part, part_regions in pool.map(_foodseg_file, files, [id2label] * len(files), [out] * len(files), [limit] * len(files)):
+            rows += part
+            if regions is not None:
+                regions += part_regions
 
 
 def autolabeled(root: Path, out: Path, rows: list[dict]) -> None:
@@ -126,18 +143,19 @@ def autolabeled(root: Path, out: Path, rows: list[dict]) -> None:
             rows.append({"path": str(file.resolve()), "label": normalize(file.parent.name), "source": "autolabel", "split": split})
 
 
-def prepare(out: Path, food101_dir: Path | None, foodseg_dir: Path | None, extra: list[Path], limit: int | None = None) -> Path:
+def prepare(out: Path, food101_dir: Path | None, foodseg_dir: Path | None, extra: list[Path], limit: int | None = None,
+            workers: int = 1) -> Path:
     out.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
     regions: list[dict] = []
     if foodseg_dir:
-        foodseg103(foodseg_dir, out, rows, limit, regions)
+        foodseg103(foodseg_dir, out, rows, limit, regions, workers)
         with (out / "regions.csv").open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=["image", "mask", "class_id", "label"])
             writer.writeheader()
             writer.writerows(regions)
     if food101_dir:
-        food101(food101_dir, out, rows, limit)
+        food101(food101_dir, out, rows, limit, workers)
     for root in extra:
         autolabeled(root, out, rows)
     manifest = out / "manifest.csv"

@@ -24,6 +24,7 @@ def main() -> None:
     p.add_argument("--foodseg", type=Path, default=ML / "data" / "FoodSeg103")
     p.add_argument("--extra", type=Path, nargs="*", default=[], help="autolabel export classify/ folders")
     p.add_argument("--limit", type=int)
+    p.add_argument("--workers", type=int, default=1, help="parallel processes (one per parquet file)")
     t = sub.add_parser("train")
     t.add_argument("--epochs", type=int, default=30)
     t.add_argument("--size", type=int, default=224)
@@ -45,7 +46,7 @@ def main() -> None:
     if args.command == "prepare":
         from .prepare import prepare
         prepare(args.work, args.food101 if args.food101.exists() else None,
-                args.foodseg if args.foodseg.exists() else None, args.extra, args.limit)
+                args.foodseg if args.foodseg.exists() else None, args.extra, args.limit, args.workers)
     elif args.command == "train":
         from .train import train
         train(args.work, args.epochs, args.batch, args.lr, args.workers, args.limit, args.size, args.arch,
