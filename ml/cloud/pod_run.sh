@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the whole GPU training job on a RunPod pod, unattended, then deletes the pod.
-# Everything lives on the network volume (/workspace), so results survive the pod and
-# a rerun resumes: finished stages are skipped and training resumes from checkpoints.
+# Code and data live on the pod's local disk (/root): the network volume is a network
+# file system, too slow for 100k small JPEGs per epoch. Logs, and results after every
+# stage, go to the network volume (/workspace), so they survive the pod.
 #
 #   nohup bash ml/cloud/pod_run.sh > /workspace/logs/run.log 2>&1 &
 #
@@ -10,26 +11,33 @@
 # MAX_HOURS caps the run; when it ends (or every stage is done) the pod removes itself.
 set -uo pipefail
 W=/workspace
-REPO=$W/repo
+REPO=/root/repo
+# SSH sessions don't get the container's environment; RunPod puts it on PID 1.
+export $(tr "\0" "\n" < /proc/1/environ | grep -E "^RUNPOD_(API_KEY|POD_ID|CPU_COUNT)=" | xargs)
 BRANCH=${BRANCH:-feat/gpu-training}
 MAX_HOURS=${MAX_HOURS:-10}
 KEEP_POD=${KEEP_POD:-0}
-mkdir -p $W/logs $W/results $W/done
+DONE=/root/done
+mkdir -p $W/logs $W/results $DONE
 STATUS=$W/logs/status.txt
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a $STATUS; }
 
-finish() {
-  log "finishing: $1"
+save_results() {
   cp -f $REPO/ml/data/foodseg/*-metrics.json $REPO/ml/data/foodclass/*-metrics.json $W/results/ 2>/dev/null
   cp -f $REPO/ml/data/foodseg/*.pt $W/results/ 2>/dev/null
   for f in checkpoint.pt effv2.pt convnext.pt; do
     [ -f $REPO/ml/data/foodclass/$f ] && cp -f $REPO/ml/data/foodclass/$f $W/results/foodclass-$f
   done
+  cp -f $REPO/ml/data/foodclass/nutrition5k.json $W/results/ 2>/dev/null
   sync
+}
+
+finish() {
+  log "finishing: $1"
+  save_results
   if [ "$KEEP_POD" = 1 ]; then log "KEEP_POD=1, leaving the pod running"; return; fi
-  log "removing pod ${RUNPOD_POD_ID:-?}"
-  runpodctl remove pod "$RUNPOD_POD_ID" >> $STATUS 2>&1 || runpodctl pod delete "$RUNPOD_POD_ID" >> $STATUS 2>&1 \
-    || runpodctl stop pod "$RUNPOD_POD_ID" >> $STATUS 2>&1
+  log "deleting pod ${RUNPOD_POD_ID:-?}"
+  curl -sS -X DELETE -H "Authorization: Bearer $RUNPOD_API_KEY" "https://api.runpod.io/v2/pods/$RUNPOD_POD_ID" >> $STATUS 2>&1
 }
 
 # Hard cap on spend: whatever happens, the pod goes away after MAX_HOURS.
@@ -38,11 +46,11 @@ WATCHDOG=$!
 
 stage() {  # stage <name> <command...>: runs once; a failure is logged and the job moves on.
   local name=$1; shift
-  if [ -f $W/done/$name ]; then log "skip $name (done)"; return 0; fi
+  if [ -f $DONE/$name ]; then log "skip $name (done)"; return 0; fi
   log "start $name"
   local began=$SECONDS
   if "$@" > $W/logs/$name.log 2>&1; then
-    touch $W/done/$name; log "done $name in $(( (SECONDS - began) / 60 )) min"
+    touch $DONE/$name; save_results; log "done $name in $(( (SECONDS - began) / 60 )) min"
   else
     log "FAILED $name after $(( (SECONDS - began) / 60 )) min (see logs/$name.log)"; return 1
   fi
@@ -51,7 +59,9 @@ stage() {  # stage <name> <command...>: runs once; a failure is logged and the j
 setup() {
   if [ -d $REPO/.git ]; then git -C $REPO fetch -q origin $BRANCH && git -C $REPO checkout -q $BRANCH && git -C $REPO reset -q --hard origin/$BRANCH
   else git clone -q --branch $BRANCH https://github.com/misoverfitting/3d_camera_visualization.git $REPO; fi
-  pip install -q pyarrow scipy pillow huggingface_hub hf_transfer
+  # Match torchvision to the image's torch.
+  pip install -q numpy pyarrow scipy pillow huggingface_hub hf_transfer \
+    "torchvision==$(python -c 'import torch; v = torch.__version__.split("+")[0].split("."); print(f"0.{int(v[1]) + 15}.{v[2]}")')" --no-deps
   python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__, torch.cuda.get_device_name(0))"
 }
 
@@ -65,7 +75,7 @@ d('EduardoPacheco/FoodSeg103', repo_type='dataset', local_dir='data/FoodSeg103')
 
 prepare() {
   cd $REPO/ml
-  python -m foodclass prepare --workers 12
+  python -m foodclass prepare --workers $CPUS
   if [ -f $W/n5k/n5k_rows.csv ]; then  # Nutrition5k pseudo-labeled crops from the Mac.
     mkdir -p data/foodclass/images
     tar -xzf $W/n5k/nutrition5k.tgz -C data/foodclass/images
@@ -75,11 +85,12 @@ prepare() {
   wc -l data/foodclass/manifest.csv data/foodclass/regions.csv
 }
 
-WORKERS=$(( $(nproc) > 4 ? $(nproc) - 2 : 2 ))
+CPUS=${RUNPOD_CPU_COUNT:-$(nproc)}
+WORKERS=$(( CPUS > 4 ? CPUS - 2 : 2 ))
 seg() { cd $REPO/ml && python -m foodseg train --workers $WORKERS "$@"; }
 cls() { cd $REPO/ml && python -m foodclass train --workers $WORKERS "$@"; }
 
-log "run started on ${RUNPOD_POD_ID:-?} ($(nproc) cpus, max ${MAX_HOURS}h)"
+log "run started on ${RUNPOD_POD_ID:-?} ($CPUS cpus, max ${MAX_HOURS}h)"
 stage setup setup || { finish "setup failed"; exit 1; }
 stage download download || { finish "download failed"; exit 1; }
 stage prepare prepare || { finish "prepare failed"; exit 1; }
