@@ -1,0 +1,90 @@
+[
+  {
+    "metadataOutputVersion" : "3.0",
+    "shortDescription" : "Food segmenter (Tare): per-pixel food probability and food class for an upright plate crop.",
+    "outputSchema" : [
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Float16",
+        "formattedType" : "MultiArray (Float16 1 × 384 × 384)",
+        "shortDescription" : "",
+        "shape" : "[1, 384, 384]",
+        "name" : "food",
+        "type" : "MultiArray"
+      },
+      {
+        "hasShapeFlexibility" : "0",
+        "isOptional" : "0",
+        "dataType" : "Int32",
+        "formattedType" : "MultiArray (Int32 1 × 384 × 384)",
+        "shortDescription" : "",
+        "shape" : "[1, 384, 384]",
+        "name" : "classes",
+        "type" : "MultiArray"
+      }
+    ],
+    "version" : "lraspp-384-e80",
+    "modelParameters" : [
+
+    ],
+    "specificationVersion" : 7,
+    "storagePrecision" : "Float16",
+    "mlProgramOperationTypeHistogram" : {
+      "Ios16.thresholdedRelu" : 20,
+      "Ios16.cast" : 1,
+      "Ios16.mul" : 31,
+      "SliceByIndex" : 2,
+      "Ios16.sub" : 2,
+      "Ios16.sigmoid" : 1,
+      "Ios16.sigmoidHard" : 28,
+      "Ios16.upsampleBilinear" : 2,
+      "Ios16.add" : 12,
+      "Ios16.relu" : 20,
+      "Ios16.softmax" : 1,
+      "Ios16.reduceMean" : 9,
+      "Ios16.conv" : 66,
+      "Ios16.reduceArgmax" : 1
+    },
+    "computePrecision" : "Mixed (Float16, Float32, Int32)",
+    "stateSchema" : [
+
+    ],
+    "isUpdatable" : "0",
+    "availability" : {
+      "macOS" : "13.0",
+      "tvOS" : "16.0",
+      "visionOS" : "1.0",
+      "watchOS" : "9.0",
+      "iOS" : "16.0",
+      "macCatalyst" : "16.0"
+    },
+    "modelType" : {
+      "name" : "MLModelType_mlProgram"
+    },
+    "inputSchema" : [
+      {
+        "height" : "384",
+        "colorspace" : "RGB",
+        "isOptional" : "0",
+        "width" : "384",
+        "isColor" : "1",
+        "formattedType" : "Image (Color 384 × 384)",
+        "hasSizeFlexibility" : "0",
+        "type" : "Image",
+        "shortDescription" : "",
+        "name" : "image"
+      }
+    ],
+    "userDefinedMetadata" : {
+      "com.github.apple.coremltools.conversion_date" : "2026-11-25",
+      "classes" : "[\"background\", \"candy\", \"egg tart\", \"french fries\", \"chocolate\", \"biscuit\", \"popcorn\", \"pudding\", \"ice cream\", \"cheese\", \"cake\", \"wine\", \"milkshake\", \"coffee\", \"juice\", \"milk\", \"tea\", \"almond\", \"red beans\", \"cashew\", \"dried cranberries\", \"soy\", \"walnut\", \"peanut\", \"egg\", \"apple\", \"date\", \"apricot\", \"avocado\", \"banana\", \"strawberry\", \"cherry\", \"blueberry\", \"raspberry\", \"mango\", \"olives\", \"peach\", \"lemon\", \"pear\", \"fig\", \"pineapple\", \"grape\", \"kiwi\", \"melon\", \"orange\", \"watermelon\", \"steak\", \"pork\", \"chicken\", \"sausage\", \"fried meat\", \"lamb\", \"sauce\", \"crab\", \"fish\", \"shellfish\", \"shrimp\", \"soup\", \"bread\", \"corn\", \"hamburger\", \"pizza\", \"steamed bun\", \"dumplings\", \"pasta\", \"noodles\", \"rice\", \"pie\", \"tofu\", \"eggplant\", \"potato\", \"garlic\", \"cauliflower\", \"tomato\", \"kelp\", \"seaweed\", \"spring onion\", \"bok choy\", \"ginger\", \"okra\", \"lettuce\", \"pumpkin\", \"cucumber\", \"white radish\", \"carrot\", \"asparagus\", \"bamboo shoots\", \"broccoli\", \"celery\", \"herbs\", \"snow peas\", \"cabbage\", \"bean sprouts\", \"onion\", \"pepper\", \"green beans\", \"green beans\", \"king oyster mushroom\", \"shiitake\", \"enoki mushroom\", \"oyster mushroom\", \"white button mushroom\", \"salad\", \"other ingredients\"]",
+      "val" : "{\"mIoU\": 0.2924308478832245, \"foodIoU\": 0.9037675261497498, \"pixelAccuracy\": 0.751361072063446, \"items\": 7463, \"itemRecall@0.5\": 0.6733217204877395, \"itemRecallWithClass@0.5\": 0.49979900844164543}",
+      "com.github.apple.coremltools.source" : "torch==2.15.0",
+      "com.github.apple.coremltools.version" : "9.0",
+      "com.github.apple.coremltools.source_dialect" : "TorchScript"
+    },
+    "generatedClassName" : "FoodSegmenter",
+    "method" : "predict"
+  }
+]

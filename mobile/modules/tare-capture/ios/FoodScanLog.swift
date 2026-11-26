@@ -47,10 +47,12 @@ enum FoodScanLog {
       json["time"] = ISO8601DateFormatter().string(from: Date())
       json["dish"] = ranked(scan.dish)
       json["wholePlate"] = ranked(scan.wholePlate)
+      json["itemFinder"] = scan.itemFinder
       json["regions"] = scan.regions.enumerated().map { i, region -> [String: Any] in
         ["index": i, "color": FoodState.palette[i % FoodState.palette.count].1,
          "box": [region.box.x, region.box.y, region.box.z, region.box.w], "areaFraction": region.areaFraction,
-         "top": ranked(region.topK), "points": region.points.map { [$0.x, $0.y] }]
+         "top": ranked(region.topK), "points": region.points.map { [$0.x, $0.y] },
+         "segmenterClass": region.segmenterClass as Any]
       }
       json["items"] = scan.items.map { ["label": $0.label, "category": $0.category, "confidence": $0.confidence, "points": $0.points.count] }
       let data = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])

@@ -23,9 +23,13 @@ public struct ItemRegion: Sendable {
   public var box: SIMD4<Double>
   /// 1-3 points well inside the item, normalized.
   public var points: [SIMD2<Double>]
+  /// The learned segmenter's class for this item (see `regions(labels:...)`); nil from `segment`.
+  public var classIndex: Int?
 
-  public init(widthPx: Int, heightPx: Int, mask: [Bool], areaPx: Int, box: SIMD4<Double>, points: [SIMD2<Double>]) {
+  public init(widthPx: Int, heightPx: Int, mask: [Bool], areaPx: Int, box: SIMD4<Double>, points: [SIMD2<Double>],
+              classIndex: Int? = nil) {
     self.widthPx = widthPx; self.heightPx = heightPx; self.mask = mask; self.areaPx = areaPx; self.box = box; self.points = points
+    self.classIndex = classIndex
   }
 }
 
@@ -127,6 +131,58 @@ public enum PlateItems {
                                   box: SIMD4(Double(x0) / Double(w), Double(y0) / Double(h), Double(x1 + 1) / Double(w), Double(y1 + 1) / Double(h)),
                                   points: points(in: item, widthPx: w, heightPx: h, count: count)))
       }
+    }
+    return regions.sorted { $0.areaPx > $1.areaPx }
+  }
+
+  /// Items from a learned segmenter's per-pixel labels (0 = not food, else a food class):
+  /// food inside `interior`, split into connected pieces of one class. Specks of a class
+  /// too small to be an item (a few misread pixels inside a rice pile) first take the
+  /// class most common around them, so they join the item they sit in.
+  public static func regions(labels: [Int], widthPx w: Int, heightPx h: Int, interior: [Bool], config: Config = .init()) -> [ItemRegion] {
+    let n = w * h
+    precondition(labels.count == n && interior.count == n)
+    let interiorArea = interior.reduce(0) { $0 + ($1 ? 1 : 0) }
+    guard interiorArea >= 100 else { return [] }
+    let minArea = max(12, Int(config.minItemFraction * Double(interiorArea)))
+    var label = (0..<n).map { interior[$0] ? labels[$0] : 0 }
+
+    func pieces(_ label: [Int]) -> [(Int, [Int])] {
+      var out: [(Int, [Int])] = []
+      for c in Set(label) where c > 0 {
+        let mask = open(close(label.map { $0 == c }, w, h, 1), w, h, 1)
+        out += components(mask, w, h).map { (c, $0) }
+      }
+      return out
+    }
+    for (_, piece) in pieces(label) where piece.count < minArea {
+      var votes: [Int: Int] = [:]
+      let inPiece = Set(piece)
+      for i in piece {
+        let x = i % w, y = i / w
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+          let nx = x + dx, ny = y + dy
+          guard nx >= 0, ny >= 0, nx < w, ny < h else { continue }
+          let j = ny * w + nx
+          if !inPiece.contains(j), label[j] > 0 { votes[label[j], default: 0] += 1 }
+        }
+      }
+      if let winner = votes.max(by: { $0.value < $1.value })?.key { for i in piece { label[i] = winner } }
+    }
+
+    var regions: [ItemRegion] = []
+    for (c, piece) in pieces(label) where piece.count >= minArea {
+      var item = [Bool](repeating: false, count: n)
+      var x0 = w, y0 = h, x1 = 0, y1 = 0
+      for i in piece {
+        item[i] = true
+        let x = i % w, y = i / w
+        x0 = min(x0, x); x1 = max(x1, x); y0 = min(y0, y); y1 = max(y1, y)
+      }
+      let count = Double(piece.count) >= 0.04 * Double(interiorArea) ? 3 : 2
+      regions.append(ItemRegion(widthPx: w, heightPx: h, mask: item, areaPx: piece.count,
+                                box: SIMD4(Double(x0) / Double(w), Double(y0) / Double(h), Double(x1 + 1) / Double(w), Double(y1 + 1) / Double(h)),
+                                points: points(in: item, widthPx: w, heightPx: h, count: count), classIndex: c))
     }
     return regions.sorted { $0.areaPx > $1.areaPx }
   }

@@ -3,11 +3,15 @@ import CoreML
 import Vision
 import simd
 
-// On-device food identification, no network: `PlateItems` splits the plate interior into
-// items (color/texture against the bare plate), and the bundled Core ML classifier
-// (ml/foodclass: MobileNetV3 fine-tuned on Food-101 + FoodSeg103 + Nutrition5k) names each
-// item from a padded crop with everything else dimmed, like the training crops. The whole
-// plate is classified once too, restricted to the Food-101 dish classes, for a dish name.
+// On-device food identification, no network. Items come from the learned segmenter
+// (LocalFoodSegmenter, ml/foodseg) when the app has it, else from `PlateItems`' color and
+// texture rules against the bare plate. The bundled Core ML classifier (ml/foodclass) names
+// each item from a padded crop with everything else dimmed, like the training crops, and
+// names the whole plate as a dish.
+//
+// Classifier formats (FoodClassifier.labels.json "format"):
+// - "two-head": outputs "dish" (Food-101 classes) and "item" (ingredient classes).
+// - v1 (no format): one softmax over every label; the dish is the best Food-101 label.
 
 struct LocalFoodResult {
   var label: String
@@ -26,6 +30,8 @@ struct LocalFoodScan {
     var topK: [(String, Double)]
     var points: [SIMD2<Double>]
     var crop: CGImage
+    /// The segmenter's class for the region, when the segmenter found it.
+    var segmenterClass: String?
   }
   /// Regions merged by label: what the app shows.
   var items: [LocalFoodResult] = []
@@ -37,6 +43,8 @@ struct LocalFoodScan {
   var wholePlate: [(String, Double)] = []
   var plateInput: CGImage?
   var overlay: CGImage?
+  /// "segmenter <version>" or "plate-items".
+  var itemFinder = "plate-items"
 }
 
 final class LocalFoodClassifier {
@@ -56,6 +64,10 @@ final class LocalFoodClassifier {
   let version: String
   /// Food-101 classes: whole dishes, as opposed to the ingredients FoodSeg103 adds.
   let dishes: Set<String>
+  /// Two-head models: label lists for the "dish" and "item" outputs.
+  let dishLabels: [String]
+  let itemLabels: [String]
+  var twoHead: Bool { !itemLabels.isEmpty }
 
   private init() throws {
     let bundle = Bundle.main.url(forResource: "TareCaptureAssets", withExtension: "bundle").flatMap(Bundle.init(url:)) ?? .main
@@ -71,20 +83,33 @@ final class LocalFoodClassifier {
     let labels = bundle.url(forResource: "\(Self.name).labels", withExtension: "json")
       .flatMap { try? Data(contentsOf: $0) }
       .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    let twoHead = labels?["format"] as? String == "two-head"
+    dishLabels = twoHead ? labels?["dishes"] as? [String] ?? [] : []
+    itemLabels = twoHead ? labels?["items"] as? [String] ?? [] : []
     dishes = Set(labels?["dishes"] as? [String] ?? [])
   }
 
-  /// All classes, best first.
-  func classifyAll(_ image: CGImage) throws -> [(String, Double)] {
+  /// Two-head: both outputs, each best first. v1: the single softmax as both.
+  func classifyAll(_ image: CGImage) throws -> (dish: [(String, Double)], item: [(String, Double)]) {
     let request = VNCoreMLRequest(model: model)
-    request.imageCropAndScaleOption = .scaleFill  // Training squashes the crop to 224x224 too.
+    request.imageCropAndScaleOption = .scaleFill  // Training squashes the crop too.
     try VNImageRequestHandler(cgImage: image).perform([request])
-    let results = (request.results as? [VNClassificationObservation]) ?? []
-    return results.map { ($0.identifier, Double($0.confidence)) }
+    if !twoHead {
+      let all = ((request.results as? [VNClassificationObservation]) ?? []).map { ($0.identifier, Double($0.confidence)) }
+      return (all, all)
+    }
+    let outputs = (request.results as? [VNCoreMLFeatureValueObservation]) ?? []
+    func ranked(_ name: String, _ labels: [String]) -> [(String, Double)] {
+      guard let array = outputs.first(where: { $0.featureName == name })?.featureValue.multiArrayValue else { return [] }
+      let count = min(labels.count, array.count)
+      return (0..<count).map { (labels[$0], array[$0].doubleValue) }.sorted { $0.1 > $1.1 }
+    }
+    return (ranked("dish", dishLabels), ranked("item", itemLabels))
   }
 
+  /// Best 3 item labels for a region crop.
   func classify(_ image: CGImage) throws -> [(String, Double)] {
-    Array(try classifyAll(image).prefix(3))
+    Array(try classifyAll(image).item.prefix(3))
   }
 
   /// `interior` and `ring` are rim outlines in the image's normalized coordinates: food
@@ -101,17 +126,24 @@ final class LocalFoodClassifier {
     drawn.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
     let inside = PlateItems.rasterize(interior, widthPx: w, heightPx: h)
     let bare = zip(inside, PlateItems.rasterize(ring, widthPx: w, heightPx: h)).map { $0 && !$1 }
-    let found = PlateItems.segment(RGBImage(widthPx: w, heightPx: h, rgba: rgba), interior: inside, ring: bare)
+    var scan = LocalFoodScan()
+    let found: [ItemRegion]
+    if let segmenter = LocalFoodSegmenter.shared {
+      found = PlateItems.regions(labels: try segmenter.labels(image, widthPx: w, heightPx: h), widthPx: w, heightPx: h, interior: inside)
+      scan.itemFinder = "segmenter \(segmenter.version)"
+    } else {
+      found = PlateItems.segment(RGBImage(widthPx: w, heightPx: h, rgba: rgba), interior: inside, ring: bare)
+    }
 
     let full = CIImage(cgImage: image)
     let insideCount = max(1, inside.filter { $0 }.count)
-    var scan = LocalFoodScan()
     var results: [LocalFoodResult] = []
     for region in found {
       guard let crop = itemCrop(full, region: region, context: context) else { continue }
       let top = try classify(crop)
       scan.regions.append(.init(box: region.box, areaFraction: Double(region.areaPx) / Double(insideCount),
-                                topK: top, points: region.points, crop: crop))
+                                topK: top, points: region.points, crop: crop,
+                                segmenterClass: LocalFoodSegmenter.shared?.className(region.classIndex)))
       guard let best = top.first else { continue }
       results.append(LocalFoodResult(label: best.0, category: categories[best.0] ?? "other", confidence: best.1, topK: top, points: region.points))
     }
@@ -121,8 +153,8 @@ final class LocalFoodClassifier {
     if let plate = Self.region(of: inside, widthPx: w, heightPx: h), let input = itemCrop(full, region: plate, context: context) {
       let all = try classifyAll(input)
       scan.plateInput = input
-      scan.wholePlate = Array(all.prefix(3))
-      scan.dish = Array(all.filter { dishes.contains($0.0) }.prefix(3))
+      scan.wholePlate = Array(all.item.prefix(3))
+      scan.dish = Array(all.dish.filter { twoHead || dishes.contains($0.0) }.prefix(3))
     }
     scan.overlay = overlay(full, regions: found, inside: inside, bare: bare, widthPx: w, heightPx: h, context: context)
     return scan

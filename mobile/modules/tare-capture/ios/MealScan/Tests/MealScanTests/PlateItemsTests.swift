@@ -78,4 +78,21 @@ final class PlateItemsTests: XCTestCase {
     let p = SIMD2(0.3, 0.7)
     XCTAssertLessThan(simd_distance(crop.normalized(sensorPixel: crop.sensorPixel(normalized: p)), p), 1e-12)
   }
+
+  func testRegionsFromSegmenterLabels() {
+    let w = 100, h = 100
+    var labels = [Int](repeating: 0, count: w * h)
+    for y in 20..<50 { for x in 20..<50 { labels[y * w + x] = 5 } }           // Square of class 5...
+    for y in 30..<33 { for x in 30..<33 { labels[y * w + x] = 7 } }           // ...with a misread speck.
+    for y in 0..<h { for x in 0..<w where pow(Double(x - 70), 2) + pow(Double(y - 70), 2) < 225 { labels[y * w + x] = 9 } }
+    for y in 0..<5 { for x in 0..<5 { labels[y * w + x] = 3 } }               // Outside the interior.
+    let interior = (0..<(w * h)).map { i in pow(Double(i % w - 50), 2) + pow(Double(i / w - 50), 2) < 46 * 46 }
+    let regions = PlateItems.regions(labels: labels, widthPx: w, heightPx: h, interior: interior)
+    XCTAssertEqual(regions.map(\.classIndex), [5, 9])
+    XCTAssertEqual(regions[0].areaPx, 900, accuracy: 20)
+    for region in regions {
+      XCTAssertFalse(region.points.isEmpty)
+      for p in region.points { XCTAssertTrue(region.mask[Int(p.y * Double(h)) * w + Int(p.x * Double(w))]) }
+    }
+  }
 }
