@@ -1,0 +1,24 @@
+{
+ "items": 7462,
+ "segmenterFound": 0.6731439292414902,
+ "classifiers": {
+  "v1": {
+   "endToEnd": 0.4878048780487805,
+   "namedWhenFound": 0.7246665339438583,
+   "noisyMaskTop1": 0.6175288126507639,
+   "cleanMaskTop1": 0.6941838649155723
+  },
+  "mnv3": {
+   "endToEnd": 0.50093808630394,
+   "namedWhenFound": 0.7441767867808082,
+   "noisyMaskTop1": 0.6685875100509246,
+   "cleanMaskTop1": 0.6894934333958724
+  },
+  "effv2": {
+   "endToEnd": 0.5156794425087108,
+   "namedWhenFound": 0.7660760501692215,
+   "noisyMaskTop1": 0.7018225676762262,
+   "cleanMaskTop1": 0.7213883677298312
+  }
+ }
+}

@@ -1,46 +1,67 @@
-# GPU training run (handoff)
+# GPU training run 1 (RunPod, 2026-11-23)
 
-Status as of 2026-11-24. Branch `feat/gpu-training`.
+Branch `feat/gpu-training`.
+- **Hardware:** one A100-SXM4 80GB pod with 16 vCPUs, in US-MO-1.
+- **Driver:** `ml/cloud/pod_run.sh`, run unattended. It works on the pod's local disk, saves results and logs to the network volume `tare-train` (`wpn6abgntl`, 50 GB), and the pod deletes itself at the end.
+- **Results downloaded to:** `ml/data/gpu-run-1/` (gitignored).
 
-## Goal
+## Cost
 
-Improve on-device food ID accuracy on real plates. First run budget: **under $50**, on RunPod.
+| Item | Cost |
+| --- | --- |
+| A100 pod, 10.0 h at $2.19/h | ≈ $22 |
+| A failed first pod, a self-delete test pod and a CPU pod to fetch results | < $0.50 |
+| Network volume, 50 GB at about $0.07/GB-month | ≈ $3.50/month until deleted |
 
-Ilya's review (`docs/ON_DEVICE_PERFORMANCE_DIAGNOSIS.md`) agrees on the priorities:
-1. **Segmentation limits accuracy first.** The hand-built PlateItems misses rice on white plates, shadows and similar cases.
-2. **Dish and ingredient labels compete in one softmax.**
+The run hit its 10 h cap partway through the last stage, the EfficientNetV2-S classifier (20 of 30 epochs).
 
-## Done (smoke-tested on a Mac with small subsets)
+## Results (FoodSeg103 val unless noted)
 
-### `python -m foodseg train|eval|export` (segmenter)
-- **Data and model:** FoodSeg103 semantic segmentation, 104 classes. COCO-pretrained LR-ASPP (`--arch lraspp`) or DeepLabV3 (`--arch deeplabv3`) on MobileNetV3.
-- **Eval metrics:** mIoU, food-mask IoU, and item recall at IoU 0.5 (class-agnostic and with class). For reference, the old PlateItems found 47% of items at IoU 0.5 on 120 FoodSeg103 val images, using Vision's plate mask as the interior.
-- **Export:** Core ML outputs `food` and `classes`, written to `Assets/FoodSegmenter.mlmodelc`. Export needs macOS (`xcrun coremlcompiler`, `mlmodel.predict`).
+### Segmenter (`python -m foodseg`), 80 epochs
 
-### `python -m foodclass train|export` (classifier)
-- **Two heads:** `dish` (Food-101) and `item` (everything else).
-- **Backbones:** `--arch mobilenet_v3_large | efficientnet_v2_s | convnext_tiny`.
-- **Training setup:** full fine-tune with bf16 on CUDA.
-- **Augmentations:**
-  - FoodSeg103 crops are cut fresh every epoch from `regions.csv` with roughened masks (`foodclass/crops.py`).
-  - Food-101 photos are sometimes dimmed outside an ellipse, like the app's whole-plate input.
-- **Export:** Core ML outputs `dish` and `item`. The labels file has `format: two-head`. Export needs macOS.
+| | mIoU | food-mask IoU | items found (IoU ≥ 0.5) | ... with the right class |
+| --- | --- | --- | --- | --- |
+| LR-ASPP MobileNetV3 (shipped, 6 MB) | 29.2% | 90.4% | 67.3% | 50.0% |
+| DeepLabV3 MobileNetV3 | 29.7% | 90.6% | 68.8% | 50.7% |
 
-## Not done yet
+For reference, the old colour/texture PlateItems found 47% of items at IoU 0.5 on 120 FoodSeg103 val photos. That earlier test used Vision's plate mask as the interior, so it isn't the same setup, but the gap is large.
 
-1. **RunPod access:** the account exists, but the API key saved in `~/.runpod/config.toml` on Morgan's Mac returned 401. A new key with read/write access is needed. The old key was printed in a session transcript, so delete it.
-2. **Pod script:**
-   - Image: a PyTorch CUDA image, on one A100 80GB (about $1.2–2/h).
-   - Steps: `pip install torch torchvision pyarrow scipy pillow huggingface_hub`, clone the repo, then download from Hugging Face: `ethz/food101` → `ml/data/food101` and `EduardoPacheco/FoodSeg103` → `ml/data/FoodSeg103`.
-   - Then run `python -m foodclass prepare`, which writes `manifest.csv` and `regions.csv`.
-3. **Nutrition5k crops:** they exist only on Morgan's Mac (`ml/data/foodclass/images/nutrition5k`, 60 MB, plus their manifest rows). Upload them to the pod and append the rows, or train the first run without them (losing about 75 Nutrition5k-only labels).
-4. **Runs, in order:**
-   - Segmenter: `python -m foodseg train --arch lraspp --epochs 80 --batch 32 --workers 16`. Optionally `--arch deeplabv3 --out dl.pt` as well.
-   - Classifier: `python -m foodclass train --arch mobilenet_v3_large --epochs 30 --batch 256 --workers 16`. If budget allows, also `--arch efficientnet_v2_s --out effv2.pt`.
-   - Stop the pod as soon as the runs finish. Download the checkpoints and `*-metrics.json`.
-5. **On a Mac:**
-   - Export both models.
-   - Teach the app the new formats:
-     - `LocalFoodID.swift` reads the `dish` and `item` outputs via `VNCoreMLFeatureValueObservation`.
-     - A new segmenter path replaces `PlateItems.segment` when `FoodSegmenter.mlmodelc` is present: food mask = `food > 0.5` inside the rim interior, items = connected components per `classes` value, with points from the existing distance transform.
-   - Then compare old vs new on Ilya's FoodScans.
+### Classifier (`python -m foodclass`), dataset crops, top-1
+
+| | Food-101 (dish) | FoodSeg103 (item) | Nutrition5k (item, pseudo-labels) |
+| --- | --- | --- | --- |
+| v1: MobileNetV3, one softmax, 6 epochs at 192 px, frozen half | 85.2 | 69.2 | 71.3 |
+| Two-head MobileNetV3, 30 epochs, full fine-tune | 85.2 | 68.7 | 72.3 |
+| Two-head EfficientNetV2-S, 20 of 30 epochs (shipped, 39 MB) | 87.3 | 71.7 | 72.7 |
+
+### End to end (`python -m foodclass.endtoend`, all 7,462 FoodSeg103 val items)
+
+Pipeline: segmenter, then app-style crops of the proposed regions, then classifier.
+
+| Classifier | named correctly, end to end | named when found | noisy-mask crops | clean crops |
+| --- | --- | --- | --- | --- |
+| v1 | 48.8% | 72.5% | 61.8% | 69.4% |
+| Two-head MobileNetV3 | 50.1% | 74.4% | 66.9% | 69.0% |
+| Two-head EfficientNetV2-S | 51.6% | 76.6% | 70.2% | 72.1% |
+
+What the numbers say:
+- **The segmenter is the big gain.**
+- **The new training makes the classifier robust to messy masks:** +5 to +8 points on noisy crops. On clean crops it barely moves.
+- **The bigger backbone adds a few points everywhere.**
+- **These are dataset numbers.** Real phone plates still need Ilya's FoodScans.
+
+## Lessons for run 2
+
+- **Classifier training was CPU-bound,** at about 180 img/s on 16 vCPUs, because fresh crops with PIL mask filters are slow. The GPU sat mostly idle. Fixes, any one of which would help:
+  - pre-generate several roughened crops per item;
+  - do the mask morphology on the GPU;
+  - pick a pod with more vCPUs.
+- **The segmenter trained fast:** 25 s per epoch.
+- **The image's system Python needs `--break-system-packages`.** Install torchvision with `--no-deps`, matched to the image's torch.
+- **Results on the network volume can be read without a GPU:** start a CPU pod (`--compute-type cpu`, about $0.06/h) with the volume attached.
+
+## Next
+
+- **Real-plate evaluation:** collect FoodScans from the phone and compare old vs new on real plates.
+- **Finish the EfficientNetV2-S run** once the data loading is fixed, or train a teacher and distill it.
+- **Generated training plates and a learned "not food / unsure" option.**
